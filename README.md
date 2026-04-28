@@ -1,42 +1,62 @@
-1. To start open your terminal/powershell, paste, and run the following command: 
+# 12 Comp Sci CCA
 
+A Flask web application for the Year 12 Computer Science CCA project.
+
+## Prerequisites
+
+- [Python 3](https://www.python.org/downloads/)
+- [Docker](https://www.docker.com)
+- Git
+
+## Setup
+
+### 1. Clone the repository
+
+```bash
 git clone https://github.com/ShrimpyStuff/12-Comp-Sci-CCA.git
+cd 12-Comp-Sci-CCA
+```
 
-2. Create the virtual environment:
+### 2. Create a virtual environment
 
+```bash
 python -m venv .venv
+```
 
-OR
+> If `python` is not recognised, use `python3` instead.
 
-python3 -m venv .venv
+### 3. Activate the virtual environment
 
-To run virtual environment:
+| Shell           | Command                          |
+| --------------- | -------------------------------- |
+| Command Prompt  | `.venv\Scripts\activate`         |
+| PowerShell      | `.\.venv\Scripts\Activate.ps1`   |
+| macOS / Linux   | `source .venv/bin/activate`      |
 
-If using Command Prompt: 
+To deactivate the virtual environment at any time:
 
-.venv\Scripts\activate
-
-If using Powershell:
-
-.\.venv\Scripts\Activate.ps1
-
-If using Terminal:
-
-source .venv/bin/activate
-
-(Just in case) To stop running venv:
-
+```bash
 deactivate
+```
 
-3. Download Docker from the following link:
+### 4. Install dependencies
 
-https://www.docker.com
+```bash
+pip install -r requirements.txt
+```
 
-Build the docker image (be in the same directory):
+## Running with Docker
 
+From the project root, build the image:
+
+```bash
 docker build -t my-image-name .
+```
 
-Run the docker container:
+Then start the container:
 
+```bash
 docker run -d -p 8080:80 my-image-name
+```
 
+The app will be available at [http://localhost:8080](http://localhost:8080).
