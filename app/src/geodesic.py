@@ -19,7 +19,9 @@ Convention used (documented per spec):
 from collections import namedtuple
 import numpy as np
 
-from app.src import fea
+# from app.src import fea
+import fea
+
 
 
 Dome = namedtuple("Dome", "nodes members base_ids apex_id")
@@ -247,14 +249,14 @@ if __name__ == "__main__":
 
     R, h = 5.0, 5.0  # hemisphere preview
     rows = []
-    for V in (2, 3, 4):
-        d = generate_dome(R, h, V)
-        rows.append((V, len(d.nodes), len(d.members), len(d.base_ids),
-                     float(d.nodes[d.apex_id, 2])))
-        visualize_dome(d, title=f"Geodesic dome V={V} (R={R} m, h={h} m)",
-                       savepath=f"dome_V{V}.png")
-        output = fea.analyze_structure(d)
-        plt.close("all")
+    V=2
+    d = generate_dome(R, h, V)
+    rows.append((V, len(d.nodes), len(d.members), len(d.base_ids),
+                    float(d.nodes[d.apex_id, 2])))
+    visualize_dome(d, title=f"Geodesic dome V={V} (R={R} m, h={h} m)",
+                    savepath=f"dome_V{V}.png")
+    output = fea.analyze_structure(d)
+    plt.close("all")
 
     print(f"{'V':>3} {'nodes':>7} {'members':>9} {'base':>6} {'apex_z':>8}")
     for V, n, m, b, z in rows:
