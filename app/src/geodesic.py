@@ -100,7 +100,7 @@ def _subdivide_class1(verts, faces, V):
     return np.array(out_verts), np.array(out_faces, dtype=int)
 
 
-def generate_dome(R, h, V):
+def generate_dome(R, h, V, radial_offsets=None):
     """Generate a geodesic dome truncated at z=0.
 
     Parameters
@@ -108,9 +108,17 @@ def generate_dome(R, h, V):
     R : float
         Ground base radius (m). Base nodes lie on the circle x^2+y^2=R^2, z=0.
     h : float
-        Dome height (m); apex lies at (0, 0, h).
+        Dome height (m); apex lies at (0, 0, h) when radial_offsets is None
+        (or when the apex offset is zero).
     V : int
         Subdivision frequency (>=1).
+    radial_offsets : array-like or None
+        Optional per-vertex radial offsets applied to unit-sphere vertices
+        before scaling and truncation. Each vertex is scaled by (1 + offset),
+        i.e. moved along its own radial direction. Length must match the
+        number of subdivided unit-sphere vertices for this V. The caller
+        is responsible for keeping the apex (vertex 0) offset at zero if
+        the apex must remain at (0, 0, h).
 
     Returns
     -------
@@ -121,6 +129,14 @@ def generate_dome(R, h, V):
 
     v_unit, f = _icosahedron()
     v_unit, f = _subdivide_class1(v_unit, f, V)
+
+    if radial_offsets is not None:
+        radial_offsets = np.asarray(radial_offsets, dtype=float)
+        assert radial_offsets.shape == (len(v_unit),), (
+            f"need {len(v_unit)} radial offsets, got {radial_offsets.shape}"
+        )
+        # Each unit-sphere vertex is its own radial unit vector; scale by (1 + delta)
+        v_unit = v_unit * (1.0 + radial_offsets)[:, None]
 
     # Scale so z=0 circle of the scaled sphere has radius R and apex at (0,0,h).
     R_s = (R * R + h * h) / (2.0 * h)
@@ -204,6 +220,24 @@ def generate_dome(R, h, V):
     return Dome(nodes=nodes, members=members, base_ids=base_ids, apex_id=apex_id)
 
 
+def symmetry_orbits(V, tol=6):
+    """Group unit-sphere vertices into 5-fold rotational orbits about z.
+
+    Returns a list of orbits; each orbit is a list of vertex indices that are
+    rotational equivalents (same cylindrical r and z within tol decimal places).
+    The vertex order matches the array generate_dome consumes via radial_offsets.
+    """
+    v_unit, _f = _icosahedron()
+    v_unit, _f = _subdivide_class1(v_unit, _f, V)
+    groups = {}
+    for i, p in enumerate(v_unit):
+        r = float(np.hypot(p[0], p[1]))
+        z = float(p[2])
+        key = (round(r, tol), round(z, tol))
+        groups.setdefault(key, []).append(i)
+    return list(groups.values())
+
+
 def visualize_dome(dome, title="Geodesic dome", savepath=None, ax=None):
     """Render the dome as a wireframe with apex (red) and base ring (green)."""
     import matplotlib.pyplot as plt
@@ -255,7 +289,8 @@ if __name__ == "__main__":
                     float(d.nodes[d.apex_id, 2])))
     visualize_dome(d, title=f"Geodesic dome V={V} (R={R} m, h={h} m)",
                     savepath=f"dome_V{V}.png")
-    output = fea.analyze_structure(d)
+    thicknesses = np.full(len(d.members), 0.01)  # uniform 1cm rod radius for the demo
+    output = fea.analyze_structure(d, thicknesses)
     plt.close("all")
 
     print(f"{'V':>3} {'nodes':>7} {'members':>9} {'base':>6} {'apex_z':>8}")
