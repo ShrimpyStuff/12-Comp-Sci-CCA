@@ -16,6 +16,19 @@ YIELD_STRESS = 5e7   # Pa, PLA
 DENSITY = 1240       # kg/m^3, PLA
 REFERENCE_LOAD = 1000.0  # N, downward apex load used for linear analysis
 
+
+def _apex_node_ids(dome):
+    apex = dome.apex_id
+    if np.isscalar(apex):
+        return [int(apex)]
+    return [int(node_id) for node_id in np.asarray(apex).tolist()]
+
+
+def _apex_node_name(apex_ids, node_id):
+    if len(apex_ids) == 1:
+        return "Apex"
+    return f"Apex_{apex_ids.index(node_id)}"
+
 def compute_model(model):
     """
     Compute the finite element model and print the results.
@@ -41,11 +54,13 @@ def analyze_structure(dome, thicknesses) -> FEModel3D: # Hopefully works for bot
     assert thicknesses.shape == (len(dome.members),), (
         f"need {len(dome.members)} thicknesses, got {thicknesses.shape}"
     )
+    apex_ids = _apex_node_ids(dome)
+    apex_set = set(apex_ids)
 
     model = FEModel3D() # Create a new finite element model
 
     for i, node in enumerate(dome.nodes):
-        name = "Apex" if i == dome.apex_id else f"Node_{i}"
+        name = _apex_node_name(apex_ids, i) if i in apex_set else f"Node_{i}"
         model.add_node(name, *node)
 
     model.add_material("PLA", E=3.5e9, G=1.3e9, nu=0.35, rho=DENSITY)  # PLA material properties (E, G, nu, rho) in N, m, Pa
@@ -58,8 +73,8 @@ def analyze_structure(dome, thicknesses) -> FEModel3D: # Hopefully works for bot
         sec_name = f"Sec_{i}"
         model.add_section(sec_name, A, I, I, J)  # Section sized for member i
 
-        i_name = "Apex" if n1 == dome.apex_id else f"Node_{n1}"
-        j_name = "Apex" if n2 == dome.apex_id else f"Node_{n2}"
+        i_name = _apex_node_name(apex_ids, n1) if n1 in apex_set else f"Node_{n1}"
+        j_name = _apex_node_name(apex_ids, n2) if n2 in apex_set else f"Node_{n2}"
 
         model.add_member(f"Member_{i}", i_node=i_name, j_node=j_name,
                         material_name="PLA", section_name=sec_name)
@@ -70,7 +85,9 @@ def analyze_structure(dome, thicknesses) -> FEModel3D: # Hopefully works for bot
     model.def_support(f"Node_{dome.base_ids[0]}", support_DX=True, support_DY=True, support_DZ=True)  # Fix one node completely
     model.def_support(f"Node_{dome.base_ids[1]}", support_DX=True, support_DY=False, support_DZ=True)  # Fix another node in only X and Z to prevent sliding
 
-    model.add_node_load("Apex", direction="FZ", P=-REFERENCE_LOAD)  # Reference load (1 kN downward) for linear scaling
+    load_share = -REFERENCE_LOAD / len(apex_ids)
+    for node_id in apex_ids:
+        model.add_node_load(_apex_node_name(apex_ids, node_id), direction="FZ", P=load_share)
 
     compute_model(model)
 
@@ -116,4 +133,4 @@ def specific_strength(model, dome, thicknesses):
     """GA fitness: failure force divided by total mass (N/kg)."""
     f = force_at_first_failure(model, thicknesses)
     m = total_mass(dome, thicknesses)
-    return f / m if m > 0 else 0.0
+    return f / (m**2) if m > 0 else 0.0

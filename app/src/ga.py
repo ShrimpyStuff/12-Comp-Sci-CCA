@@ -1,23 +1,31 @@
 from dataclasses import dataclass
 import csv
 import json
+from multiprocessing import Pool
 
 import numpy as np
 import matplotlib.pyplot as plt
 import random
 
-import fea
-import geodesic
+try:
+    from . import geodesic_no_apex
+    from . import fea
+    from . import geodesic
+except ImportError:
+    import fea
+    import geodesic
+    import geodesic_no_apex
 
 
 THICKNESS_MIN = 0.005
-THICKNESS_MAX = 0.05
+THICKNESS_MAX = 0.01
 OFFSET_MIN = -0.10
 OFFSET_MAX = 0.10
 V_CHOICES = (2, 3, 4)
 
-DOME_R = 5.0
-DOME_H = 5.0
+DOME_R = 0.076
+DOME_H = 0.076
+DOME_VARIANT = "open"  # set to "open" to use the open-top dome variant
 
 
 _EXPECTED_LENGTHS_CACHE = {}
@@ -30,13 +38,55 @@ MUTATION_OFFSET_SIGMA    = 0.10 * (OFFSET_MAX - OFFSET_MIN)
 V_MUTATION_RATE = 0.05
 
 
+def _dome_backend():
+    return geodesic_no_apex if DOME_VARIANT == "open" else geodesic
+
+
+def _artifact_path(prefix, extension):
+    return f"{prefix}_{DOME_VARIANT}.{extension}"
+
+
+def best_genome_path():
+    return _artifact_path("best_genome", "json")
+
+
+def log_csv_path():
+    return _artifact_path("fitness_history", "csv")
+
+
+def fitness_plot_path():
+    return _artifact_path("fitness_curve", "png")
+
+
+def best_dome_plot_path():
+    return _artifact_path("best_dome", "png")
+
+
+def _generate_dome(V, radial_offsets=None):
+    if DOME_VARIANT == "open":
+        return geodesic_no_apex.generate_open_dome(
+            R=DOME_R, h=DOME_H, V=V, radial_offsets=radial_offsets,
+        )
+    return geodesic.generate_dome(
+        R=DOME_R, h=DOME_H, V=V, radial_offsets=radial_offsets,
+    )
+
+
+def _visualize_dome(dome, title, path):
+    if DOME_VARIANT == "open":
+        geodesic_no_apex.visualize_open_dome(dome, title=title, savepath=path)
+    else:
+        geodesic.visualize_dome(dome, title=title, savepath=path)
+
+
 def expected_lengths(V):
-    if V not in _EXPECTED_LENGTHS_CACHE:
-        dome = geodesic.generate_dome(R=DOME_R, h=DOME_H, V=V)
+    key = (DOME_VARIANT, V)
+    if key not in _EXPECTED_LENGTHS_CACHE:
+        dome = _generate_dome(V)
         n_members = len(dome.members)
         n_orbits = len(geodesic.symmetry_orbits(V))
-        _EXPECTED_LENGTHS_CACHE[V] = (n_members, n_orbits)
-    return _EXPECTED_LENGTHS_CACHE[V]
+        _EXPECTED_LENGTHS_CACHE[key] = (n_members, n_orbits)
+    return _EXPECTED_LENGTHS_CACHE[key]
 
 
 @dataclass
@@ -84,10 +134,7 @@ def expand_offsets(V, per_orbit_offsets):
 
 def decode(genome):
     per_vertex_offsets = expand_offsets(genome.V, genome.offsets)
-    dome = geodesic.generate_dome(
-        R=DOME_R, h=DOME_H, V=genome.V,
-        radial_offsets=per_vertex_offsets,
-    )
+    dome = _generate_dome(genome.V, radial_offsets=per_vertex_offsets)
     return dome, genome.thicknesses
 
 
@@ -97,7 +144,7 @@ _CACHE_MISSES = 0
 
 
 def _genome_key(genome):
-    return (genome.V, genome.thicknesses.tobytes(), genome.offsets.tobytes())
+    return (DOME_VARIANT, genome.V, genome.thicknesses.tobytes(), genome.offsets.tobytes())
 
 
 def cached_fitness(genome, compute):
@@ -126,6 +173,7 @@ def _evaluate_uncached(genome):
         model = fea.analyze_structure(dome, thicknesses)
     except Exception:
         return 0.0
+    # Fitness is the dome's failure load divided by its total mass.
     return fea.specific_strength(model, dome, thicknesses)
 
 
@@ -193,14 +241,6 @@ def mutate(genome, rng=None):
     offsets     = np.clip(offsets, OFFSET_MIN, OFFSET_MAX)
 
     return Genome(V=genome.V, thicknesses=thicknesses, offsets=offsets)
-
-
-LOG_CSV_PATH = "fitness_history.csv"
-BEST_GENOME_PATH = "best_genome.json"
-FITNESS_PLOT_PATH = "fitness_curve.png"
-BEST_DOME_PLOT_PATH = "best_dome.png"
-
-
 def save_genome(genome, path):
     data = {
         "V": int(genome.V),
@@ -228,7 +268,7 @@ def plot_fitness(history, path):
     plt.plot(history[:, 1], label="mean",  color="steelblue")
     plt.plot(history[:, 2], label="worst", color="red", alpha=0.5)
     plt.xlabel("generation")
-    plt.ylabel("specific strength (N/kg)")
+    plt.ylabel("strength-to-weight ratio (N/kg)")
     plt.title("GA fitness over generations")
     plt.legend()
     plt.grid(alpha=0.3)
@@ -240,9 +280,9 @@ def visualize_genome(genome, path, title=None):
     dome, thicknesses = decode(genome)
     if title is None:
         mass = fea.total_mass(dome, thicknesses)
-        title = (f"Best dome  V={genome.V}  members={len(dome.members)}  "
+        title = (f"Best {DOME_VARIANT} dome  V={genome.V}  members={len(dome.members)}  "
                  f"mass={mass:.1f} kg")
-    geodesic.visualize_dome(dome, title=title, savepath=path)
+    _visualize_dome(dome, title, path)
     plt.close("all")
 
 
@@ -250,12 +290,13 @@ if __name__ == "__main__":
     rng = np.random.default_rng(seed=0)
 
     population = [random_genome(V=2, rng=rng) for _ in range(POP_SIZE)]
-    fitness = [evaluate(g) for g in population]
+    with Pool() as pool:
+        fitness = pool.map(evaluate, population)
 
     history = []
     best_ever = -float("inf")
 
-    with open(LOG_CSV_PATH, "w", newline="") as csv_file:
+    with open(log_csv_path(), "w", newline="") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(["generation", "best", "mean", "worst",
                          "cache_hits", "cache_misses"])
@@ -272,7 +313,8 @@ if __name__ == "__main__":
                 child = mutate(child, rng=rng)
                 next_pop.append(child)
             population = next_pop
-            fitness = [evaluate(g) for g in population]
+            with Pool() as pool:
+                fitness = pool.map(evaluate, population)
 
             best = max(fitness)
             mean = sum(fitness) / len(fitness)
@@ -286,14 +328,17 @@ if __name__ == "__main__":
             if best > best_ever:
                 best_ever = best
                 best_idx = fitness.index(best)
-                save_genome(population[best_idx], BEST_GENOME_PATH)
+                save_genome(population[best_idx], best_genome_path())
 
             print(f"Gen {gen:3d}  best={best:8.2f}  mean={mean:8.2f}  "
                   f"worst={worst:8.2f}  cache={hits}/{hits+misses}")
 
-    plot_fitness(history, FITNESS_PLOT_PATH)
-    visualize_genome(load_genome(BEST_GENOME_PATH), BEST_DOME_PLOT_PATH,
-                     title=f"Best dome  fitness={best_ever:.2f} N/kg")
-    print(f"\nDone. All-time best fitness: {best_ever:.2f}")
-    print(f"Saved: {LOG_CSV_PATH}, {BEST_GENOME_PATH}, "
-          f"{FITNESS_PLOT_PATH}, {BEST_DOME_PLOT_PATH}")
+    plot_fitness(history, fitness_plot_path())
+    visualize_genome(
+        load_genome(best_genome_path()),
+        best_dome_plot_path(),
+        title=f"Best {DOME_VARIANT} dome  strength-to-weight={best_ever:.2f} N/kg",
+    )
+    print(f"\nDone. All-time best strength-to-weight ratio: {best_ever:.2f}")
+    print(f"Saved: {log_csv_path()}, {best_genome_path()}, "
+          f"{fitness_plot_path()}, {best_dome_plot_path()}")

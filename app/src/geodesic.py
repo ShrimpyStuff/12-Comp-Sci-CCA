@@ -19,8 +19,10 @@ Convention used (documented per spec):
 from collections import namedtuple
 import numpy as np
 
-# from app.src import fea
-import fea
+try:
+    from . import fea
+except ImportError:
+    import fea
 
 
 
