@@ -82,6 +82,7 @@ nest-asyncio==1.6.0
 nest-asyncio2==1.7.2
 notebook_shim==0.2.4
 numpy==2.4.4
+numpy-stl==3.2.0
 packaging==26.2
 pandocfilters==1.5.1
 parso==0.8.6
@@ -101,6 +102,7 @@ PyNiteFEA==2.4.1
 pyparsing==3.3.2
 python-dateutil==2.9.0.post0
 python-json-logger==4.1.0
+python-utils==3.9.1
 pyvista==0.47.3
 pywinpty==3.0.3
 PyYAML==6.0.3
