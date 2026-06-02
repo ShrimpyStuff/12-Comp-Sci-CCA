@@ -10,9 +10,9 @@ from collections import namedtuple
 import numpy as np
 
 try:
-    from . import geodesic
-except ImportError:
     import geodesic
+except ImportError:
+    import src.geodesic as geodesic
 
 
 OpenDome = namedtuple("OpenDome", "nodes members base_ids apex_id")

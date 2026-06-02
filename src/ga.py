@@ -1,37 +1,43 @@
-from dataclasses import dataclass
+from dataclasses import dataclass # Just a quick way to cleanup any classes instead of needing an ugly __init__ method
 import csv
 import json
 from multiprocessing import Pool
+from pathlib import Path
+from datetime import datetime
 
 import numpy as np
 import matplotlib.pyplot as plt
-import random
 
 try:
-    from . import geodesic_no_apex
-    from . import fea
-    from . import geodesic
-except ImportError:
+    import geodesic_no_apex
     import fea
     import geodesic
-    import geodesic_no_apex
+except ImportError:
+    import src.fea as fea
+    import src.geodesic as geodesic
+    import src.geodesic_no_apex as geodesic_no_apex
 
 
-THICKNESS_MIN = 0.005
-THICKNESS_MAX = 0.01
+THICKNESS_MIN = 0.002
+THICKNESS_MAX = 0.005
 OFFSET_MIN = -0.10
 OFFSET_MAX = 0.10
 V_CHOICES = (2, 3, 4)
 
-DOME_R = 0.076
-DOME_H = 0.076
-DOME_VARIANT = "open"  # set to "open" to use the open-top dome variant
+DOME_R = 0.08
+DOME_H = 0.08
+DOME_VARIANT = "open"  # set to "open" to use the open-top dome variant or "full" for the closed dome
+
+# Physical size limits for the finished dome geometry.
+MIN_DOME_RADIUS = 0.07
+MAX_DOME_RADIUS = 0.10
 
 
 _EXPECTED_LENGTHS_CACHE = {}
+_RUN_STAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 POP_SIZE = 60
-GENERATIONS = 100
+GENERATIONS = 200
 
 MUTATION_THICKNESS_SIGMA = 0.10 * (THICKNESS_MAX - THICKNESS_MIN)
 MUTATION_OFFSET_SIGMA    = 0.10 * (OFFSET_MAX - OFFSET_MIN)
@@ -43,7 +49,11 @@ def _dome_backend():
 
 
 def _artifact_path(prefix, extension):
-    return f"{prefix}_{DOME_VARIANT}.{extension}"
+    return f"{DOME_VARIANT}_stls/{prefix}_{DOME_VARIANT}_{_RUN_STAMP}.{extension}"
+
+
+def _ensure_parent_dir(path):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
 
 
 def best_genome_path():
@@ -138,37 +148,36 @@ def decode(genome):
     return dome, genome.thicknesses
 
 
-_FITNESS_CACHE = {}
-_CACHE_HITS = 0
-_CACHE_MISSES = 0
+def _dome_within_radius_limits(dome, min_radius=MIN_DOME_RADIUS, max_radius=MAX_DOME_RADIUS):
+    nodes = np.asarray(dome.nodes, dtype=float)
+    radii = np.linalg.norm(nodes, axis=1)
 
+    if np.any(radii > max_radius):
+        return False
 
-def _genome_key(genome):
-    return (DOME_VARIANT, genome.V, genome.thicknesses.tobytes(), genome.offsets.tobytes())
+    if np.any(radii < min_radius):
+        return False
 
+    if not dome.members:
+        return True
 
-def cached_fitness(genome, compute):
-    global _CACHE_HITS, _CACHE_MISSES
-    key = _genome_key(genome)
-    if key in _FITNESS_CACHE:
-        _CACHE_HITS += 1
-        return _FITNESS_CACHE[key]
-    _CACHE_MISSES += 1
-    value = compute()
-    _FITNESS_CACHE[key] = value
-    return value
+    member_nodes = np.asarray(dome.members, dtype=int)
+    a = nodes[member_nodes[:, 0]]
+    b = nodes[member_nodes[:, 1]]
+    ab = b - a
+    ab_len_sq = np.einsum("ij,ij->i", ab, ab)
 
+    # Distance from the origin to each strut segment.
+    t = -np.einsum("ij,ij->i", a, ab) / np.where(ab_len_sq > 0.0, ab_len_sq, 1.0)
+    t = np.clip(t, 0.0, 1.0)
+    closest = a + ab * t[:, None]
+    closest_radii = np.linalg.norm(closest, axis=1)
 
-def cache_stats():
-    return _CACHE_HITS, _CACHE_MISSES, len(_FITNESS_CACHE)
-
-
-def evaluate(genome):
-    return cached_fitness(genome, lambda: _evaluate_uncached(genome))
-
-
+    return np.all(closest_radii >= min_radius)
 def _evaluate_uncached(genome):
     dome, thicknesses = decode(genome)
+    if not _dome_within_radius_limits(dome):
+        return 0.0
     try:
         model = fea.analyze_structure(dome, thicknesses)
     except Exception:
@@ -242,6 +251,7 @@ def mutate(genome, rng=None):
 
     return Genome(V=genome.V, thicknesses=thicknesses, offsets=offsets)
 def save_genome(genome, path):
+    _ensure_parent_dir(path)
     data = {
         "V": int(genome.V),
         "thicknesses": genome.thicknesses.tolist(),
@@ -262,6 +272,7 @@ def load_genome(path):
 
 
 def plot_fitness(history, path):
+    _ensure_parent_dir(path)
     history = np.asarray(history)
     plt.figure(figsize=(8, 5))
     plt.plot(history[:, 0], label="best",  color="green")
@@ -291,15 +302,15 @@ if __name__ == "__main__":
 
     population = [random_genome(V=2, rng=rng) for _ in range(POP_SIZE)]
     with Pool() as pool:
-        fitness = pool.map(evaluate, population)
+        fitness = pool.map(_evaluate_uncached, population)
 
     history = []
     best_ever = -float("inf")
 
+    _ensure_parent_dir(log_csv_path())
     with open(log_csv_path(), "w", newline="") as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(["generation", "best", "mean", "worst",
-                         "cache_hits", "cache_misses"])
+        writer.writerow(["generation", "best", "mean", "worst"])
 
         for gen in range(GENERATIONS):
             next_pop = []
@@ -314,15 +325,14 @@ if __name__ == "__main__":
                 next_pop.append(child)
             population = next_pop
             with Pool() as pool:
-                fitness = pool.map(evaluate, population)
+                fitness = pool.map(_evaluate_uncached, population)
 
             best = max(fitness)
             mean = sum(fitness) / len(fitness)
             worst = min(fitness)
-            hits, misses, _ = cache_stats()
 
             history.append((best, mean, worst))
-            writer.writerow([gen, best, mean, worst, hits, misses])
+            writer.writerow([gen, best, mean, worst])
             csv_file.flush()
 
             if best > best_ever:
@@ -331,7 +341,7 @@ if __name__ == "__main__":
                 save_genome(population[best_idx], best_genome_path())
 
             print(f"Gen {gen:3d}  best={best:8.2f}  mean={mean:8.2f}  "
-                  f"worst={worst:8.2f}  cache={hits}/{hits+misses}")
+                                    f"worst={worst:8.2f}")
 
     plot_fitness(history, fitness_plot_path())
     visualize_genome(

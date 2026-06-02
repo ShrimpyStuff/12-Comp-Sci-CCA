@@ -20,9 +20,9 @@ from collections import namedtuple
 import numpy as np
 
 try:
-    from . import fea
-except ImportError:
     import fea
+except ImportError:
+    import src.fea as fea
 
 
 
