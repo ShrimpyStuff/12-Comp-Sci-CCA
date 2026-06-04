@@ -149,7 +149,14 @@ def main():
     axis.grid(alpha=0.3)
 
     canvas = FigureCanvasTkAgg(figure, master=plot_frame)
-    canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+    canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    dome_figure = plt.figure(figsize=(5, 5))
+    dome_axis = dome_figure.add_subplot(111, projection="3d")
+    dome_axis.set_title("Best Dome (current generation)")
+
+    dome_canvas = FigureCanvasTkAgg(dome_figure, master=plot_frame)
+    dome_canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
     run_button: tk.Button
     gui_button: tk.Checkbutton
@@ -189,6 +196,10 @@ def main():
         except tk.TclError:
             pass
         try:
+            dome_canvas.get_tk_widget().destroy()
+        except tk.TclError:
+            pass
+        try:
             root.quit()
         except tk.TclError:
             pass
@@ -197,18 +208,23 @@ def main():
         except tk.TclError:
             pass
 
-    def redraw(history):
+    def redraw(history, best_genome=None):
         if not is_open():
             return
         ga.draw_history(history, axis)
         canvas.draw_idle()
-    
+        if best_genome is not None:
+            ga.draw_genome(best_genome, dome_axis)
+            dome_canvas.draw_idle()
+
     def toggle_gui():
         nonlocal enable_gui
         if enable_gui.get():
-            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            dome_canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         else:
             canvas.get_tk_widget().pack_forget()
+            dome_canvas.get_tk_widget().pack_forget()
 
     def append_output(line):
         if not is_open():
@@ -254,7 +270,7 @@ def main():
                     print(f"Radius: {radius}, Height: {height}")
                     ga.set_params(radius, height, min_thick, max_thick, min_offset, max_offset)
                     if enable_gui:
-                        ga.run_ga(progress_callback=lambda snapshot: safe_after(0, lambda data=snapshot: redraw(data)))
+                        ga.run_ga(progress_callback=lambda snapshot, genome: safe_after(0, lambda data=snapshot, g=genome: redraw(data, g)))
                     else:
                         ga.run_ga()
                 safe_after(0, finish_run)

@@ -310,6 +310,19 @@ def create_gui_graph(history):
     return fig
 
 
+def draw_genome(genome, ax):
+    """Render the dome for a genome into an existing 3D axis (no file saved)."""
+    ax.clear()
+    dome, _thicknesses = decode(genome)
+    title = (f"Best {DOME_VARIANT} dome  V={genome.V}  "
+             f"members={len(dome.members)}")
+    if DOME_VARIANT == "open":
+        geodesic_no_apex.visualize_open_dome(dome, title=title, ax=ax)
+    else:
+        geodesic.visualize_dome(dome, title=title, ax=ax)
+    return ax.figure
+
+
 def visualize_genome(genome, path, title=None):
     dome, thicknesses = decode(genome)
     if title is None:
@@ -363,6 +376,7 @@ def run_ga(progress_callback=None):
             best = max(fitness)
             mean = sum(fitness) / len(fitness)
             worst = min(fitness)
+            best_idx = fitness.index(best)
 
             history.append((best, mean, worst))
             writer.writerow([gen, best, mean, worst])
@@ -370,14 +384,13 @@ def run_ga(progress_callback=None):
 
             if best > best_ever:
                 best_ever = best
-                best_idx = fitness.index(best)
                 save_genome(population[best_idx], best_genome_path())
 
             print(f"Gen {gen:3d}  best={best:8.2f}  mean={mean:8.2f}  "
                                     f"worst={worst:8.2f}")
 
             if progress_callback is not None:
-                progress_callback(list(history))
+                progress_callback(list(history), clone(population[best_idx]))
 
     plot_fitness(history, fitness_plot_path())
     visualize_genome(
