@@ -56,12 +56,12 @@ def generate_open_dome(R, h, V, radial_offsets=None):
 
 def visualize_open_dome(dome, title="Open geodesic dome", savepath=None, ax=None):
     """Render the open dome with apex-ring nodes and base ring highlighted."""
-    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
     from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
     fig = None
     if ax is None:
-        fig = plt.figure(figsize=(7, 7))
+        fig = Figure(figsize=(7, 7))
         ax = fig.add_subplot(111, projection="3d")
 
     nodes = dome.nodes
@@ -93,7 +93,7 @@ def visualize_open_dome(dome, title="Open geodesic dome", savepath=None, ax=None
     ax.set_xlabel("x (m)"); ax.set_ylabel("y (m)"); ax.set_zlabel("z (m)")
     ax.legend(loc="upper right", fontsize=8)
     if savepath:
-        plt.savefig(savepath, dpi=120, bbox_inches="tight")
+        fig.savefig(savepath, dpi=120, bbox_inches="tight")
     return fig, ax
 
 

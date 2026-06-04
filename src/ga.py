@@ -32,12 +32,13 @@ DOME_VARIANT = "open"  # set to "open" to use the open-top dome variant or "full
 MIN_DOME_RADIUS = 0.07
 MAX_DOME_RADIUS = 0.10
 
+SEED = 0
 
 _EXPECTED_LENGTHS_CACHE = {}
 _RUN_STAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-POP_SIZE = 60
-GENERATIONS = 200
+POP_SIZE = 10
+GENERATIONS = 10
 
 MUTATION_THICKNESS_SIGMA = 0.10 * (THICKNESS_MAX - THICKNESS_MIN)
 MUTATION_OFFSET_SIGMA    = 0.10 * (OFFSET_MAX - OFFSET_MIN)
@@ -274,17 +275,39 @@ def load_genome(path):
 def plot_fitness(history, path):
     _ensure_parent_dir(path)
     history = np.asarray(history)
-    plt.figure(figsize=(8, 5))
-    plt.plot(history[:, 0], label="best",  color="green")
-    plt.plot(history[:, 1], label="mean",  color="steelblue")
-    plt.plot(history[:, 2], label="worst", color="red", alpha=0.5)
-    plt.xlabel("generation")
-    plt.ylabel("strength-to-weight ratio (N/kg)")
-    plt.title("GA fitness over generations")
-    plt.legend()
-    plt.grid(alpha=0.3)
-    plt.savefig(path, dpi=120, bbox_inches="tight")
-    plt.close()
+    from matplotlib.figure import Figure
+
+    fig = Figure(figsize=(8, 5))
+    ax = fig.add_subplot(111)
+    ax.plot(history[:, 0], label="best", color="green")
+    ax.plot(history[:, 1], label="mean", color="steelblue")
+    ax.plot(history[:, 2], label="worst", color="red", alpha=0.5)
+    ax.set_xlabel("generation")
+    ax.set_ylabel("strength-to-weight ratio (N/kg)")
+    ax.set_title("GA fitness over generations")
+    ax.legend()
+    ax.grid(alpha=0.3)
+    fig.savefig(path, dpi=120, bbox_inches="tight")
+
+def draw_history(history, ax):
+    history = np.asarray(history)
+    ax.clear()
+    ax.set_title("Dome Optimization Progress")
+    if len(history) > 0:
+        ax.plot(history[:, 0], label="best", color="green")
+        ax.plot(history[:, 1], label="mean", color="steelblue")
+        ax.plot(history[:, 2], label="worst", color="red", alpha=0.5)
+        ax.legend()
+    ax.set_xlabel("generation")
+    ax.set_ylabel("strength-to-weight ratio (N/kg)")
+    ax.grid(alpha=0.3)
+    return ax.figure
+
+
+def create_gui_graph(history):
+    fig, ax = plt.subplots()
+    draw_history(history, ax)
+    return fig
 
 
 def visualize_genome(genome, path, title=None):
@@ -294,11 +317,17 @@ def visualize_genome(genome, path, title=None):
         title = (f"Best {DOME_VARIANT} dome  V={genome.V}  members={len(dome.members)}  "
                  f"mass={mass:.1f} kg")
     _visualize_dome(dome, title, path)
-    plt.close("all")
 
 
-if __name__ == "__main__":
-    rng = np.random.default_rng(seed=0)
+def set_params(radius, height, seed=0):
+    global DOME_R, DOME_H, SEED
+    DOME_R = radius
+    DOME_H = height
+    SEED = seed
+
+
+def run_ga(progress_callback=None):
+    rng = np.random.default_rng(seed=SEED)
 
     population = [random_genome(V=2, rng=rng) for _ in range(POP_SIZE)]
     with Pool() as pool:
@@ -343,6 +372,9 @@ if __name__ == "__main__":
             print(f"Gen {gen:3d}  best={best:8.2f}  mean={mean:8.2f}  "
                                     f"worst={worst:8.2f}")
 
+            if progress_callback is not None:
+                progress_callback(list(history))
+
     plot_fitness(history, fitness_plot_path())
     visualize_genome(
         load_genome(best_genome_path()),
@@ -352,3 +384,6 @@ if __name__ == "__main__":
     print(f"\nDone. All-time best strength-to-weight ratio: {best_ever:.2f}")
     print(f"Saved: {log_csv_path()}, {best_genome_path()}, "
           f"{fitness_plot_path()}, {best_dome_plot_path()}")
+
+if __name__ == "__main__":
+    run_ga()
