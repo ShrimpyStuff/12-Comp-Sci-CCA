@@ -31,7 +31,6 @@ class StreamRedirector:
     def __init__(self, on_line):
         self.on_line = on_line
         self.buffer = ""
-        self.lines = []
 
     def write(self, text):
         if not text:
@@ -40,24 +39,16 @@ class StreamRedirector:
         self.buffer += text
         while "\n" in self.buffer:
             line, self.buffer = self.buffer.split("\n", 1)
-            self.lines.append(line)
             self.on_line(line)
         return len(text)
 
     def flush(self):
         if self.buffer:
-            self.lines.append(self.buffer)
             self.on_line(self.buffer)
             self.buffer = ""
 
-    def getvalue(self):
-        if self.buffer:
-            return "\n".join(self.lines + [self.buffer])
-        return "\n".join(self.lines)
-
 
 def main():
-    output_stream = None
     closing = False
     root = tk.Tk()
     root.title("Dome Optimizer")
@@ -160,7 +151,6 @@ def main():
 
     run_button: tk.Button
     gui_button: tk.Checkbutton
-    output_lines = []
 
     def is_open():
         if closing:
@@ -218,7 +208,6 @@ def main():
             dome_canvas.draw_idle()
 
     def toggle_gui():
-        nonlocal enable_gui
         if enable_gui.get():
             canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             dome_canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -229,27 +218,15 @@ def main():
     def append_output(line):
         if not is_open():
             return
-        output_lines.append(line)
         write_output(line + "\n")
 
-    def finish_run():
+    def finish_run(status):
         if not is_open():
             return
         run_button.config(state=tk.NORMAL)
-        status_var.set("Done")
-        if output_stream is not None:
-            write_output(output_stream.getvalue())
-
-    def finish_run_with_error():
-        if not is_open():
-            return
-        run_button.config(state=tk.NORMAL)
-        status_var.set("Ready")
-        if output_stream is not None:
-            write_output(output_stream.getvalue())
+        status_var.set(status)
 
     def start():
-        nonlocal output_stream, enable_gui
         radius = float(radius_entry.get())
         height = float(height_entry.get())
         min_thick = float(min_thick_entry.get())
@@ -259,7 +236,6 @@ def main():
 
         run_button.config(state=tk.DISABLED)
         status_var.set("Running GA...")
-        output_lines.clear()
         write_output("", clear=True)
 
         output_stream = StreamRedirector(lambda line: safe_after(0, lambda l=line: append_output(l)))
@@ -273,9 +249,9 @@ def main():
                         ga.run_ga(progress_callback=lambda snapshot, genome: safe_after(0, lambda data=snapshot, g=genome: redraw(data, g)))
                     else:
                         ga.run_ga()
-                safe_after(0, finish_run)
+                safe_after(0, lambda: finish_run("Done"))
             except Exception:
-                safe_after(0, finish_run_with_error)
+                safe_after(0, lambda: finish_run("Ready"))
 
         threading.Thread(target=worker, daemon=True).start()
 
