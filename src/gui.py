@@ -8,6 +8,13 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 import ga
 
+# import ctypes
+
+# # Using funky ctypes stuff from google to allow me to change the taskbar icon by registering the program as a unique app
+# myappid = 'sajidmonowar.dome_optimizer' # Define a unique string
+# ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
+
 
 def validate_float(text):
     if text == "":
@@ -54,24 +61,75 @@ def main():
     closing = False
     root = tk.Tk()
     root.title("Dome Optimizer")
-    root.geometry("1000x900")
 
-    # app_icon = tk.PhotoImage(file="my_icon.png")
-    # root.iconphoto(True, app_icon)
+    window_width = 1200
+    window_height = 975
+
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+
+    center_x = int(screen_width / 2 - window_width / 2)
+    center_y = int(screen_height / 2 - window_height / 2) - 25
+
+    root.geometry(f'{window_width}x{window_height}+{center_x}+{center_y}')
+
+    app_icon = tk.PhotoImage(file="icon.png")
+    root.iconphoto(True, app_icon)
+
+    enable_gui = tk.BooleanVar(value=True)
 
     vcmd = (root.register(validate_float), "%P")
+    
+    label_frame = tk.Frame(root)
+    label_frame.pack(pady=10)
 
-    instruction_label = tk.Label(root, text="Enter the radius of the dome:", font=("Arial", 12))
+    radius_frame = tk.Frame(label_frame)
+    radius_frame.grid(row=0, column=0, padx=10)
+    instruction_label = tk.Label(radius_frame, text="Enter the radius of the dome:", font=("Arial", 12))
     instruction_label.pack(pady=10)
+    radius_entry = tk.Entry(radius_frame, font=("Arial", 12), width=25, validate="key", validatecommand=vcmd)
+    radius_entry.insert(0, "0.08")
+    radius_entry.pack()
 
-    radius_entry = tk.Entry(root, font=("Arial", 12), width=25, validate="key", validatecommand=vcmd)
-    radius_entry.pack(pady=5)
-
-    instruction_label_1 = tk.Label(root, text="Enter the height of the dome:", font=("Arial", 12))
+    height_frame = tk.Frame(label_frame)
+    height_frame.grid(row=0, column=1, padx=10)
+    instruction_label_1 = tk.Label(height_frame, text="Enter the height of the dome:", font=("Arial", 12))
     instruction_label_1.pack(pady=10)
+    height_entry = tk.Entry(height_frame, font=("Arial", 12), width=25, validate="key", validatecommand=vcmd)
+    height_entry.insert(0, "0.08")
+    height_entry.pack()
 
-    height_entry = tk.Entry(root, font=("Arial", 12), width=25, validate="key", validatecommand=vcmd)
-    height_entry.pack(pady=5)
+    min_thick_frame = tk.Frame(label_frame)
+    min_thick_frame.grid(row=0, column=2, padx=10, pady=10)
+    instruction_label_2 = tk.Label(min_thick_frame, text="Enter the minimum thickness:", font=("Arial", 12))
+    instruction_label_2.pack(pady=10)
+    min_thick_entry = tk.Entry(min_thick_frame, font=("Arial", 12), width=25, validate="key", validatecommand=vcmd)
+    min_thick_entry.insert(0, "0.002")
+    min_thick_entry.pack()
+
+    max_thick_frame = tk.Frame(label_frame)
+    max_thick_frame.grid(row=1, column=0, padx=10, pady=10)
+    instruction_label_3 = tk.Label(max_thick_frame, text="Enter the maximum thickness:", font=("Arial", 12))
+    instruction_label_3.pack(pady=10)
+    max_thick_entry = tk.Entry(max_thick_frame, font=("Arial", 12), width=25, validate="key", validatecommand=vcmd)
+    max_thick_entry.insert(0, "0.005")
+    max_thick_entry.pack()
+
+    min_offset_frame = tk.Frame(label_frame)
+    min_offset_frame.grid(row=1, column=1, padx=10, pady=10)
+    instruction_label_4 = tk.Label(min_offset_frame, text="Enter the minimum offset:", font=("Arial", 12))
+    instruction_label_4.pack(pady=10)
+    min_offset_entry = tk.Entry(min_offset_frame, font=("Arial", 12), width=25, validate="key", validatecommand=vcmd)
+    min_offset_entry.insert(0, "-0.10")
+    min_offset_entry.pack()
+
+    max_offset_frame = tk.Frame(label_frame)
+    max_offset_frame.grid(row=1, column=2, padx=10, pady=10)
+    instruction_label_5 = tk.Label(max_offset_frame, text="Enter the maximum offset:", font=("Arial", 12))
+    instruction_label_5.pack(pady=10)
+    max_offset_entry = tk.Entry(max_offset_frame, font=("Arial", 12), width=25, validate="key", validatecommand=vcmd)
+    max_offset_entry.insert(0, "0.10")
+    max_offset_entry.pack()
 
     status_var = tk.StringVar(value="Ready")
     status_label = tk.Label(root, textvariable=status_var, font=("Arial", 10))
@@ -94,6 +152,7 @@ def main():
     canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
     run_button: tk.Button
+    gui_button: tk.Checkbutton
     output_lines = []
 
     def is_open():
@@ -143,6 +202,13 @@ def main():
             return
         ga.draw_history(history, axis)
         canvas.draw_idle()
+    
+    def toggle_gui():
+        nonlocal enable_gui
+        if enable_gui.get():
+            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        else:
+            canvas.get_tk_widget().pack_forget()
 
     def append_output(line):
         if not is_open():
@@ -167,9 +233,13 @@ def main():
             write_output(output_stream.getvalue())
 
     def start():
-        nonlocal output_stream
+        nonlocal output_stream, enable_gui
         radius = float(radius_entry.get())
         height = float(height_entry.get())
+        min_thick = float(min_thick_entry.get())
+        max_thick = float(max_thick_entry.get())
+        min_offset = float(min_offset_entry.get())
+        max_offset = float(max_offset_entry.get())
 
         run_button.config(state=tk.DISABLED)
         status_var.set("Running GA...")
@@ -182,8 +252,11 @@ def main():
             try:
                 with contextlib.redirect_stdout(output_stream):
                     print(f"Radius: {radius}, Height: {height}")
-                    ga.set_params(radius, height)
-                    ga.run_ga(progress_callback=lambda snapshot: safe_after(0, lambda data=snapshot: redraw(data)))
+                    ga.set_params(radius, height, min_thick, max_thick, min_offset, max_offset)
+                    if enable_gui:
+                        ga.run_ga(progress_callback=lambda snapshot: safe_after(0, lambda data=snapshot: redraw(data)))
+                    else:
+                        ga.run_ga()
                 safe_after(0, finish_run)
             except Exception:
                 safe_after(0, finish_run_with_error)
@@ -192,6 +265,9 @@ def main():
 
     run_button = tk.Button(root, text="Calculate", font=("Arial", 12), command=start)
     run_button.pack(pady=20)
+
+    gui_button = tk.Checkbutton(root, text="Show GUI", variable=enable_gui, command=toggle_gui)
+    gui_button.pack(pady=10)
 
     root.protocol("WM_DELETE_WINDOW", on_close)
     root.mainloop()

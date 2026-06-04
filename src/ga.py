@@ -319,10 +319,14 @@ def visualize_genome(genome, path, title=None):
     _visualize_dome(dome, title, path)
 
 
-def set_params(radius, height, seed=0):
-    global DOME_R, DOME_H, SEED
+def set_params(radius, height, min_thick, max_thick, min_offset, max_offset, seed=0):
+    global DOME_R, DOME_H, THICKNESS_MIN, THICKNESS_MAX, OFFSET_MIN, OFFSET_MAX, SEED
     DOME_R = radius
     DOME_H = height
+    THICKNESS_MIN = min_thick
+    THICKNESS_MAX = max_thick
+    OFFSET_MIN = min_offset
+    OFFSET_MAX = max_offset
     SEED = seed
 
 
