@@ -1,6 +1,6 @@
 # 12 Comp Sci CCA
 
-A Flask web application for the Year 12 Computer Science CCA project.
+A Tkinter app for the Year 12 Computer Science CCA project.
 
 ## Prerequisites
 
@@ -59,4 +59,4 @@ Then start the container:
 docker run -d -p 8080:80 my-image-name
 ```
 
-The app will be available at [http://localhost:8080](http://localhost:8080).
+The app will open with a custom GUI.

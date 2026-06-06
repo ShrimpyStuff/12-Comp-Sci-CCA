@@ -1,13 +1,4 @@
-# from pathlib import Path
-
-# from mpi4py import MPI
 # from petsc4py.PETSc import ScalarType  # type: ignore
-
-# import numpy as np
-
-# import ufl
-# from dolfinx import fem, io, mesh, plot
-# from dolfinx.fem.petsc import LinearProblem
 
 import numpy as np
 from Pynite import FEModel3D
@@ -19,9 +10,9 @@ REFERENCE_LOAD = 1000.0  # N, downward apex load used for linear analysis
 
 def _apex_node_ids(dome):
     apex = dome.apex_id
-    if np.isscalar(apex):
+    if np.isscalar(apex): # Checking for one scalar node for the singular apex dome
         return [int(apex)]
-    return [int(node_id) for node_id in np.asarray(apex).tolist()]
+    return [int(node_id) for node_id in np.asarray(apex).tolist()] # All apex nodes for the open dome which spreads the force
 
 
 def _apex_node_name(apex_ids, node_id):
@@ -133,4 +124,5 @@ def specific_strength(model, dome, thicknesses):
     """GA fitness: failure force divided by total mass (N/kg)."""
     f = force_at_first_failure(model, thicknesses)
     m = total_mass(dome, thicknesses)
+    # print(m)
     return f / (m**2) if m > 0 else 0.0
