@@ -12,36 +12,38 @@ try:
     import geodesic_no_apex
     import fea
     import geodesic
+    import create_stl
 except ImportError:
     import src.fea as fea
     import src.geodesic as geodesic
     import src.geodesic_no_apex as geodesic_no_apex
+    import src.create_stl as create_stl
 
-
-THICKNESS_MIN = 0.002
-THICKNESS_MAX = 0.005
-OFFSET_MIN = -0.10
-OFFSET_MAX = 0.10
+# Note: `offsets` are dimensionless fractional radial offsets (e.g. 0.1 == +10%). - This is a library thing that needed to be fixed earlier
+THICKNESS_MIN = 2.0    # mm
+THICKNESS_MAX = 5.0    # mm
+OFFSET_MIN = -0.01 # -1% radial offset
+OFFSET_MAX = 0.01
 V_CHOICES = (2, 3, 4)
 
-DOME_R = 0.08
-DOME_H = 0.08
+DOME_R = 80.0   # mm
+DOME_H = 80.0   # mm
 DOME_VARIANT = "open"  # set to "open" to use the open-top dome variant or "full" for the closed dome
 
 # Physical size limits for the finished dome geometry.
-MIN_DOME_RADIUS = 0.07
-MAX_DOME_RADIUS = 0.10
+MIN_DOME_RADIUS = 70.0   # mm
+MAX_DOME_RADIUS = 100.0  # mm
 
 SEED = 0
 
 _EXPECTED_LENGTHS_CACHE = {}
 _RUN_STAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-POP_SIZE = 10
-GENERATIONS = 10
+POP_SIZE = 60
+GENERATIONS = 100
 
-MUTATION_THICKNESS_SIGMA = 0.10 * (THICKNESS_MAX - THICKNESS_MIN)
-MUTATION_OFFSET_SIGMA    = 0.10 * (OFFSET_MAX - OFFSET_MIN)
+MUTATION_THICKNESS_SIGMA = 0.10 * (THICKNESS_MAX - THICKNESS_MIN)  # mm
+MUTATION_OFFSET_SIGMA    = 0.10 * (OFFSET_MAX - OFFSET_MIN)         # dimensionless
 V_MUTATION_RATE = 0.05
 
 
@@ -73,13 +75,20 @@ def best_dome_plot_path():
     return _artifact_path("best_dome", "png")
 
 
+def best_dome_stl_path():
+    return _artifact_path("best_dome", "stl")
+
+
 def _generate_dome(V, radial_offsets=None):
+    # convert mm to m for geodesic
+    R_m = DOME_R / 1000.0
+    h_m = DOME_H / 1000.0
     if DOME_VARIANT == "open":
         return geodesic_no_apex.generate_open_dome(
-            R=DOME_R, h=DOME_H, V=V, radial_offsets=radial_offsets,
+            R=R_m, h=h_m, V=V, radial_offsets=radial_offsets,
         )
     return geodesic.generate_dome(
-        R=DOME_R, h=DOME_H, V=V, radial_offsets=radial_offsets,
+        R=R_m, h=h_m, V=V, radial_offsets=radial_offsets,
     )
 
 
@@ -146,17 +155,21 @@ def expand_offsets(V, per_orbit_offsets):
 def decode(genome):
     per_vertex_offsets = expand_offsets(genome.V, genome.offsets)
     dome = _generate_dome(genome.V, radial_offsets=per_vertex_offsets)
-    return dome, genome.thicknesses
+    # genome.thicknesses are stored in mm; convert to metres for FEA/visualization
+    return dome, (genome.thicknesses / 1000.0)
 
 
 def _dome_within_radius_limits(dome, min_radius=MIN_DOME_RADIUS, max_radius=MAX_DOME_RADIUS):
+    # min_radius and max_radius are provided in mm by default; convert to metres
+    min_r_m = min_radius / 1000.0
+    max_r_m = max_radius / 1000.0
     nodes = np.asarray(dome.nodes, dtype=float)
     radii = np.linalg.norm(nodes, axis=1)
 
-    if np.any(radii > max_radius):
+    if np.any(radii > max_r_m):
         return False
 
-    if np.any(radii < min_radius):
+    if np.any(radii < min_r_m):
         return False
 
     if not dome.members:
@@ -174,7 +187,7 @@ def _dome_within_radius_limits(dome, min_radius=MIN_DOME_RADIUS, max_radius=MAX_
     closest = a + ab * t[:, None]
     closest_radii = np.linalg.norm(closest, axis=1)
 
-    return np.all(closest_radii >= min_radius)
+    return np.all(closest_radii >= min_r_m)
 def _evaluate_uncached(genome):
     dome, thicknesses = decode(genome)
     if not _dome_within_radius_limits(dome):
@@ -332,8 +345,34 @@ def visualize_genome(genome, path, title=None):
     _visualize_dome(dome, title, path)
 
 
-def set_params(radius, height, min_thick, max_thick, min_offset, max_offset, seed=0):
-    global DOME_R, DOME_H, THICKNESS_MIN, THICKNESS_MAX, OFFSET_MIN, OFFSET_MAX, SEED
+def export_best_stl(genome_path=None, path=None):
+    """Export the current best genome to an STL file using the shared naming scheme."""
+    if genome_path is None:
+        genome_path = best_genome_path()
+    if path is None:
+        path = best_dome_stl_path()
+
+    # create_stl works in metres, while this module stores lengths in mm.
+    create_stl.DOME_VARIANT = "open" if DOME_VARIANT == "open" else "normal"
+    create_stl.create_stl(
+        path,
+        genome_path=genome_path,
+        R=DOME_R / 1000.0,
+        h=DOME_H / 1000.0,
+        export_scale=1000.0,
+    )
+
+
+def set_params(radius, height, min_thick, max_thick, min_offset, max_offset,
+               pop_size=None, generations=None, variant=None, seed=0):
+    """Set global parameters.
+
+    radius, height, min_thick, max_thick are expected in mm (consistent with
+    the module defaults). pop_size and generations, if provided, override the
+    GA population size and number of generations. variant can be 'open' or
+    'full'.
+    """
+    global DOME_R, DOME_H, THICKNESS_MIN, THICKNESS_MAX, OFFSET_MIN, OFFSET_MAX, SEED, POP_SIZE, GENERATIONS, DOME_VARIANT
     DOME_R = radius
     DOME_H = height
     THICKNESS_MIN = min_thick
@@ -341,6 +380,12 @@ def set_params(radius, height, min_thick, max_thick, min_offset, max_offset, see
     OFFSET_MIN = min_offset
     OFFSET_MAX = max_offset
     SEED = seed
+    if pop_size is not None:
+        POP_SIZE = int(pop_size)
+    if generations is not None:
+        GENERATIONS = int(generations)
+    if variant is not None:
+        DOME_VARIANT = str(variant)
 
 
 def run_ga(progress_callback=None):
@@ -398,9 +443,10 @@ def run_ga(progress_callback=None):
         best_dome_plot_path(),
         title=f"Best {DOME_VARIANT} dome  strength-to-weight={best_ever:.2f} N/kg",
     )
+    export_best_stl()
     print(f"\nDone. All-time best strength-to-weight ratio: {best_ever:.2f}")
     print(f"Saved: {log_csv_path()}, {best_genome_path()}, "
-          f"{fitness_plot_path()}, {best_dome_plot_path()}")
+          f"{fitness_plot_path()}, {best_dome_plot_path()}, {best_dome_stl_path()}")
 
 if __name__ == "__main__":
     run_ga()

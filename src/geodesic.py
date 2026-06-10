@@ -245,7 +245,7 @@ def visualize_dome(dome, title="Geodesic dome", savepath=None, ax=None):
     from matplotlib.figure import Figure
     from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
-    fig = None
+    fig: Figure
     if ax is None:
         fig = Figure(figsize=(7, 7))
         ax = fig.add_subplot(111, projection="3d")
