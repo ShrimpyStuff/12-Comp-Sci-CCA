@@ -1,6 +1,6 @@
 # 12 Comp Sci CCA
 
-A Flask web application for the Year 12 Computer Science CCA project.
+A Tkinter app for the Year 12 Computer Science CCA project.
 
 ## Prerequisites
 

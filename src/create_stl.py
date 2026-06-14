@@ -1,25 +1,24 @@
 from pathlib import Path
 import json
+from datetime import datetime
 
 import numpy as np
 import trimesh
 
 try:
-    from . import geodesic_no_apex
-    from . import geodesic
-except ImportError:
     import geodesic_no_apex
     import geodesic
+except ImportError:
+    import src.geodesic_no_apex as geodesic_no_apex
+    import src.geodesic as geodesic
 
-DEFAULT_DOME_R = 5.0
-DEFAULT_DOME_H = 5.0
+DEFAULT_DOME_R = 0.076
+DEFAULT_DOME_H = 0.076
 DOME_VARIANT = "open"  # set to "normal" for the standard apex dome
-NODE_SPHERE_SCALE = 1.0
+MM_PER_METER = 1000.0
+NODE_SPHERE_SCALE = 1
 NODE_SPHERE_SECTIONS = 2
-
-
-def _variant_suffix():
-    return "open" if DOME_VARIANT == "open" else "normal"
+_RUN_STAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 def _genome_path():
@@ -121,7 +120,7 @@ def _generate_dome(R, h, V, radial_offsets=None):
 
 
 def create_stl(filename, genome_path=None, R=DEFAULT_DOME_R, h=DEFAULT_DOME_H,
-               V=None, thicknesses=None, offsets=None):
+               V=None, thicknesses=None, offsets=None, export_scale=MM_PER_METER):
     if genome_path is None:
         genome_path = _genome_path()
     genome = _load_best_genome(genome_path)
@@ -152,7 +151,11 @@ def create_stl(filename, genome_path=None, R=DEFAULT_DOME_R, h=DEFAULT_DOME_H,
         if mesh is not None:
             cylinders.append(mesh)
 
-    mesh = trimesh.util.concatenate(cylinders) if cylinders else trimesh.Trimesh()
+    mesh = trimesh.util.concatenate(cylinders) if cylinders else trimesh.Trimesh() # Account for no members
+
+    if export_scale != 1.0:
+        mesh = mesh.copy()
+        mesh.apply_scale(float(export_scale))
 
     output_path = Path(filename)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -160,4 +163,4 @@ def create_stl(filename, genome_path=None, R=DEFAULT_DOME_R, h=DEFAULT_DOME_H,
     return mesh
     
 if __name__ == "__main__":
-    create_stl(f"best_dome_{_variant_suffix()}.stl")
+    create_stl(f"best_dome_{DOME_VARIANT}_{_RUN_STAMP}.stl")

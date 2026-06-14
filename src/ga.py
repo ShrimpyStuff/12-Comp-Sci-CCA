@@ -1,40 +1,49 @@
-from dataclasses import dataclass
+from dataclasses import dataclass # Just a quick way to cleanup any classes instead of needing an ugly __init__ method
 import csv
 import json
 from multiprocessing import Pool
+from pathlib import Path
+from datetime import datetime
 
 import numpy as np
 import matplotlib.pyplot as plt
-import random
 
 try:
-    from . import geodesic_no_apex
-    from . import fea
-    from . import geodesic
-except ImportError:
+    import geodesic_no_apex
     import fea
     import geodesic
-    import geodesic_no_apex
+    import create_stl
+except ImportError:
+    import src.fea as fea
+    import src.geodesic as geodesic
+    import src.geodesic_no_apex as geodesic_no_apex
+    import src.create_stl as create_stl
 
-
-THICKNESS_MIN = 0.005
-THICKNESS_MAX = 0.01
-OFFSET_MIN = -0.10
-OFFSET_MAX = 0.10
+# Note: `offsets` are dimensionless fractional radial offsets (e.g. 0.1 == +10%). - This is a library thing that needed to be fixed earlier
+THICKNESS_MIN = 2.0    # mm
+THICKNESS_MAX = 5.0    # mm
+OFFSET_MIN = -0.01 # -1% radial offset
+OFFSET_MAX = 0.01
 V_CHOICES = (2, 3, 4)
 
-DOME_R = 0.076
-DOME_H = 0.076
-DOME_VARIANT = "open"  # set to "open" to use the open-top dome variant
+DOME_R = 80.0   # mm
+DOME_H = 80.0   # mm
+DOME_VARIANT = "open"  # set to "open" to use the open-top dome variant or "full" for the closed dome
 
+# Physical size limits for the finished dome geometry.
+MIN_DOME_RADIUS = 70.0   # mm
+MAX_DOME_RADIUS = 100.0  # mm
+
+SEED = 0
 
 _EXPECTED_LENGTHS_CACHE = {}
+_RUN_STAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 POP_SIZE = 60
 GENERATIONS = 100
 
-MUTATION_THICKNESS_SIGMA = 0.10 * (THICKNESS_MAX - THICKNESS_MIN)
-MUTATION_OFFSET_SIGMA    = 0.10 * (OFFSET_MAX - OFFSET_MIN)
+MUTATION_THICKNESS_SIGMA = 0.10 * (THICKNESS_MAX - THICKNESS_MIN)  # mm
+MUTATION_OFFSET_SIGMA    = 0.10 * (OFFSET_MAX - OFFSET_MIN)         # dimensionless
 V_MUTATION_RATE = 0.05
 
 
@@ -43,7 +52,11 @@ def _dome_backend():
 
 
 def _artifact_path(prefix, extension):
-    return f"{prefix}_{DOME_VARIANT}.{extension}"
+    return f"{DOME_VARIANT}_stls/{prefix}_{DOME_VARIANT}_{_RUN_STAMP}.{extension}"
+
+
+def _ensure_parent_dir(path):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
 
 
 def best_genome_path():
@@ -62,13 +75,20 @@ def best_dome_plot_path():
     return _artifact_path("best_dome", "png")
 
 
+def best_dome_stl_path():
+    return _artifact_path("best_dome", "stl")
+
+
 def _generate_dome(V, radial_offsets=None):
+    # convert mm to m for geodesic
+    R_m = DOME_R / 1000.0
+    h_m = DOME_H / 1000.0
     if DOME_VARIANT == "open":
         return geodesic_no_apex.generate_open_dome(
-            R=DOME_R, h=DOME_H, V=V, radial_offsets=radial_offsets,
+            R=R_m, h=h_m, V=V, radial_offsets=radial_offsets,
         )
     return geodesic.generate_dome(
-        R=DOME_R, h=DOME_H, V=V, radial_offsets=radial_offsets,
+        R=R_m, h=h_m, V=V, radial_offsets=radial_offsets,
     )
 
 
@@ -135,40 +155,43 @@ def expand_offsets(V, per_orbit_offsets):
 def decode(genome):
     per_vertex_offsets = expand_offsets(genome.V, genome.offsets)
     dome = _generate_dome(genome.V, radial_offsets=per_vertex_offsets)
-    return dome, genome.thicknesses
+    # genome.thicknesses are stored in mm; convert to metres for FEA/visualization
+    return dome, (genome.thicknesses / 1000.0)
 
 
-_FITNESS_CACHE = {}
-_CACHE_HITS = 0
-_CACHE_MISSES = 0
+def _dome_within_radius_limits(dome, min_radius=MIN_DOME_RADIUS, max_radius=MAX_DOME_RADIUS):
+    # min_radius and max_radius are provided in mm by default; convert to metres
+    min_r_m = min_radius / 1000.0
+    max_r_m = max_radius / 1000.0
+    nodes = np.asarray(dome.nodes, dtype=float)
+    radii = np.linalg.norm(nodes, axis=1)
 
+    if np.any(radii > max_r_m):
+        return False
 
-def _genome_key(genome):
-    return (DOME_VARIANT, genome.V, genome.thicknesses.tobytes(), genome.offsets.tobytes())
+    if np.any(radii < min_r_m):
+        return False
 
+    if not dome.members:
+        return True
 
-def cached_fitness(genome, compute):
-    global _CACHE_HITS, _CACHE_MISSES
-    key = _genome_key(genome)
-    if key in _FITNESS_CACHE:
-        _CACHE_HITS += 1
-        return _FITNESS_CACHE[key]
-    _CACHE_MISSES += 1
-    value = compute()
-    _FITNESS_CACHE[key] = value
-    return value
+    member_nodes = np.asarray(dome.members, dtype=int)
+    a = nodes[member_nodes[:, 0]]
+    b = nodes[member_nodes[:, 1]]
+    ab = b - a
+    ab_len_sq = np.einsum("ij,ij->i", ab, ab)
 
+    # Distance from the origin to each strut segment.
+    t = -np.einsum("ij,ij->i", a, ab) / np.where(ab_len_sq > 0.0, ab_len_sq, 1.0)
+    t = np.clip(t, 0.0, 1.0)
+    closest = a + ab * t[:, None]
+    closest_radii = np.linalg.norm(closest, axis=1)
 
-def cache_stats():
-    return _CACHE_HITS, _CACHE_MISSES, len(_FITNESS_CACHE)
-
-
-def evaluate(genome):
-    return cached_fitness(genome, lambda: _evaluate_uncached(genome))
-
-
+    return np.all(closest_radii >= min_r_m)
 def _evaluate_uncached(genome):
     dome, thicknesses = decode(genome)
+    if not _dome_within_radius_limits(dome):
+        return 0.0
     try:
         model = fea.analyze_structure(dome, thicknesses)
     except Exception:
@@ -242,6 +265,7 @@ def mutate(genome, rng=None):
 
     return Genome(V=genome.V, thicknesses=thicknesses, offsets=offsets)
 def save_genome(genome, path):
+    _ensure_parent_dir(path)
     data = {
         "V": int(genome.V),
         "thicknesses": genome.thicknesses.tolist(),
@@ -262,18 +286,54 @@ def load_genome(path):
 
 
 def plot_fitness(history, path):
+    _ensure_parent_dir(path)
     history = np.asarray(history)
-    plt.figure(figsize=(8, 5))
-    plt.plot(history[:, 0], label="best",  color="green")
-    plt.plot(history[:, 1], label="mean",  color="steelblue")
-    plt.plot(history[:, 2], label="worst", color="red", alpha=0.5)
-    plt.xlabel("generation")
-    plt.ylabel("strength-to-weight ratio (N/kg)")
-    plt.title("GA fitness over generations")
-    plt.legend()
-    plt.grid(alpha=0.3)
-    plt.savefig(path, dpi=120, bbox_inches="tight")
-    plt.close()
+    from matplotlib.figure import Figure
+
+    fig = Figure(figsize=(8, 5))
+    ax = fig.add_subplot(111)
+    ax.plot(history[:, 0], label="best", color="green")
+    ax.plot(history[:, 1], label="mean", color="steelblue")
+    ax.plot(history[:, 2], label="worst", color="red", alpha=0.5)
+    ax.set_xlabel("generation")
+    ax.set_ylabel("strength-to-weight ratio (N/kg)")
+    ax.set_title("GA fitness over generations")
+    ax.legend()
+    ax.grid(alpha=0.3)
+    fig.savefig(path, dpi=120, bbox_inches="tight")
+
+def draw_history(history, ax):
+    history = np.asarray(history)
+    ax.clear()
+    ax.set_title("Dome Optimization Progress")
+    if len(history) > 0:
+        ax.plot(history[:, 0], label="best", color="green")
+        ax.plot(history[:, 1], label="mean", color="steelblue")
+        ax.plot(history[:, 2], label="worst", color="red", alpha=0.5)
+        ax.legend()
+    ax.set_xlabel("generation")
+    ax.set_ylabel("strength-to-weight ratio (N/kg)")
+    ax.grid(alpha=0.3)
+    return ax.figure
+
+
+def create_gui_graph(history):
+    fig, ax = plt.subplots()
+    draw_history(history, ax)
+    return fig
+
+
+def draw_genome(genome, ax):
+    """Render the dome for a genome into an existing 3D axis (no file saved)."""
+    ax.clear()
+    dome, _thicknesses = decode(genome)
+    title = (f"Best {DOME_VARIANT} dome  V={genome.V}  "
+             f"members={len(dome.members)}")
+    if DOME_VARIANT == "open":
+        geodesic_no_apex.visualize_open_dome(dome, title=title, ax=ax)
+    else:
+        geodesic.visualize_dome(dome, title=title, ax=ax)
+    return ax.figure
 
 
 def visualize_genome(genome, path, title=None):
@@ -283,23 +343,65 @@ def visualize_genome(genome, path, title=None):
         title = (f"Best {DOME_VARIANT} dome  V={genome.V}  members={len(dome.members)}  "
                  f"mass={mass:.1f} kg")
     _visualize_dome(dome, title, path)
-    plt.close("all")
 
 
-if __name__ == "__main__":
-    rng = np.random.default_rng(seed=0)
+def export_best_stl(genome_path=None, path=None):
+    """Export the current best genome to an STL file using the shared naming scheme."""
+    if genome_path is None:
+        genome_path = best_genome_path()
+    if path is None:
+        path = best_dome_stl_path()
+
+    # create_stl works in metres, while this module stores lengths in mm.
+    create_stl.DOME_VARIANT = "open" if DOME_VARIANT == "open" else "normal"
+    create_stl.create_stl(
+        path,
+        genome_path=genome_path,
+        R=DOME_R / 1000.0,
+        h=DOME_H / 1000.0,
+        export_scale=1000.0,
+    )
+
+
+def set_params(radius, height, min_thick, max_thick, min_offset, max_offset,
+               pop_size=None, generations=None, variant=None, seed=0):
+    """Set global parameters.
+
+    radius, height, min_thick, max_thick are expected in mm (consistent with
+    the module defaults). pop_size and generations, if provided, override the
+    GA population size and number of generations. variant can be 'open' or
+    'full'.
+    """
+    global DOME_R, DOME_H, THICKNESS_MIN, THICKNESS_MAX, OFFSET_MIN, OFFSET_MAX, SEED, POP_SIZE, GENERATIONS, DOME_VARIANT
+    DOME_R = radius
+    DOME_H = height
+    THICKNESS_MIN = min_thick
+    THICKNESS_MAX = max_thick
+    OFFSET_MIN = min_offset
+    OFFSET_MAX = max_offset
+    SEED = seed
+    if pop_size is not None:
+        POP_SIZE = int(pop_size)
+    if generations is not None:
+        GENERATIONS = int(generations)
+    if variant is not None:
+        DOME_VARIANT = str(variant)
+
+
+def run_ga(progress_callback=None):
+    rng = np.random.default_rng(seed=SEED)
 
     population = [random_genome(V=2, rng=rng) for _ in range(POP_SIZE)]
     with Pool() as pool:
-        fitness = pool.map(evaluate, population)
+        fitness = pool.map(_evaluate_uncached, population)
 
     history = []
     best_ever = -float("inf")
 
+    _ensure_parent_dir(log_csv_path())
     with open(log_csv_path(), "w", newline="") as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(["generation", "best", "mean", "worst",
-                         "cache_hits", "cache_misses"])
+        writer.writerow(["generation", "best", "mean", "worst"])
 
         for gen in range(GENERATIONS):
             next_pop = []
@@ -314,24 +416,26 @@ if __name__ == "__main__":
                 next_pop.append(child)
             population = next_pop
             with Pool() as pool:
-                fitness = pool.map(evaluate, population)
+                fitness = pool.map(_evaluate_uncached, population)
 
             best = max(fitness)
             mean = sum(fitness) / len(fitness)
             worst = min(fitness)
-            hits, misses, _ = cache_stats()
+            best_idx = fitness.index(best)
 
             history.append((best, mean, worst))
-            writer.writerow([gen, best, mean, worst, hits, misses])
+            writer.writerow([gen, best, mean, worst])
             csv_file.flush()
 
             if best > best_ever:
                 best_ever = best
-                best_idx = fitness.index(best)
                 save_genome(population[best_idx], best_genome_path())
 
             print(f"Gen {gen:3d}  best={best:8.2f}  mean={mean:8.2f}  "
-                  f"worst={worst:8.2f}  cache={hits}/{hits+misses}")
+                                    f"worst={worst:8.2f}")
+
+            if progress_callback is not None:
+                progress_callback(list(history), clone(population[best_idx]))
 
     plot_fitness(history, fitness_plot_path())
     visualize_genome(
@@ -339,6 +443,10 @@ if __name__ == "__main__":
         best_dome_plot_path(),
         title=f"Best {DOME_VARIANT} dome  strength-to-weight={best_ever:.2f} N/kg",
     )
+    export_best_stl()
     print(f"\nDone. All-time best strength-to-weight ratio: {best_ever:.2f}")
     print(f"Saved: {log_csv_path()}, {best_genome_path()}, "
-          f"{fitness_plot_path()}, {best_dome_plot_path()}")
+          f"{fitness_plot_path()}, {best_dome_plot_path()}, {best_dome_stl_path()}")
+
+if __name__ == "__main__":
+    run_ga()

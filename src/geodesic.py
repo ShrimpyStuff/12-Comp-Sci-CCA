@@ -20,9 +20,9 @@ from collections import namedtuple
 import numpy as np
 
 try:
-    from . import fea
-except ImportError:
     import fea
+except ImportError:
+    import src.fea as fea
 
 
 
@@ -242,12 +242,12 @@ def symmetry_orbits(V, tol=6):
 
 def visualize_dome(dome, title="Geodesic dome", savepath=None, ax=None):
     """Render the dome as a wireframe with apex (red) and base ring (green)."""
-    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
     from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
-    fig = None
+    fig: Figure
     if ax is None:
-        fig = plt.figure(figsize=(7, 7))
+        fig = Figure(figsize=(7, 7))
         ax = fig.add_subplot(111, projection="3d")
 
     nodes = dome.nodes
@@ -274,7 +274,7 @@ def visualize_dome(dome, title="Geodesic dome", savepath=None, ax=None):
     ax.set_xlabel("x (m)"); ax.set_ylabel("y (m)"); ax.set_zlabel("z (m)")
     ax.legend(loc="upper right", fontsize=8)
     if savepath:
-        plt.savefig(savepath, dpi=120, bbox_inches="tight")
+        fig.savefig(savepath, dpi=120, bbox_inches="tight")
     return fig, ax
 
 
