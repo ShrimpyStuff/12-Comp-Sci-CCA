@@ -27,6 +27,16 @@ def validate_float(text):
         return False
 
 
+def validate_int(text):
+    if text == "":
+        return True
+    try:
+        int(text)
+        return True
+    except ValueError:
+        return False
+
+
 class StreamRedirector:
     def __init__(self, on_line):
         self.on_line = on_line
@@ -79,7 +89,9 @@ def main():
     instruction_label = tk.Label(radius_frame, text="Enter the radius of the dome:", font=("Arial", 12))
     instruction_label.pack(pady=10)
     radius_entry = tk.Entry(radius_frame, font=("Arial", 12), width=25, validate="key", validatecommand=vcmd)
-    radius_entry.insert(0, "0.08")
+    radius_entry.insert(0, "80.0")
+    radius_unit = tk.Label(radius_frame, text="mm", font=("Arial", 10))
+    radius_unit.pack()
     radius_entry.pack()
 
     height_frame = tk.Frame(label_frame)
@@ -87,7 +99,9 @@ def main():
     instruction_label_1 = tk.Label(height_frame, text="Enter the height of the dome:", font=("Arial", 12))
     instruction_label_1.pack(pady=10)
     height_entry = tk.Entry(height_frame, font=("Arial", 12), width=25, validate="key", validatecommand=vcmd)
-    height_entry.insert(0, "0.08")
+    height_entry.insert(0, "80.0")
+    height_unit = tk.Label(height_frame, text="mm", font=("Arial", 10))
+    height_unit.pack()
     height_entry.pack()
 
     min_thick_frame = tk.Frame(label_frame)
@@ -95,7 +109,9 @@ def main():
     instruction_label_2 = tk.Label(min_thick_frame, text="Enter the minimum thickness:", font=("Arial", 12))
     instruction_label_2.pack(pady=10)
     min_thick_entry = tk.Entry(min_thick_frame, font=("Arial", 12), width=25, validate="key", validatecommand=vcmd)
-    min_thick_entry.insert(0, "0.002")
+    min_thick_entry.insert(0, "2.0")
+    min_thick_unit = tk.Label(min_thick_frame, text="mm", font=("Arial", 10))
+    min_thick_unit.pack()
     min_thick_entry.pack()
 
     max_thick_frame = tk.Frame(label_frame)
@@ -103,7 +119,9 @@ def main():
     instruction_label_3 = tk.Label(max_thick_frame, text="Enter the maximum thickness:", font=("Arial", 12))
     instruction_label_3.pack(pady=10)
     max_thick_entry = tk.Entry(max_thick_frame, font=("Arial", 12), width=25, validate="key", validatecommand=vcmd)
-    max_thick_entry.insert(0, "0.005")
+    max_thick_entry.insert(0, "5.0")
+    max_thick_unit = tk.Label(max_thick_frame, text="mm", font=("Arial", 10))
+    max_thick_unit.pack()
     max_thick_entry.pack()
 
     min_offset_frame = tk.Frame(label_frame)
@@ -112,6 +130,8 @@ def main():
     instruction_label_4.pack(pady=10)
     min_offset_entry = tk.Entry(min_offset_frame, font=("Arial", 12), width=25, validate="key", validatecommand=vcmd)
     min_offset_entry.insert(0, "-0.10")
+    min_offset_unit = tk.Label(min_offset_frame, text="% as a decimal", font=("Arial", 10))
+    min_offset_unit.pack()
     min_offset_entry.pack()
 
     max_offset_frame = tk.Frame(label_frame)
@@ -120,7 +140,38 @@ def main():
     instruction_label_5.pack(pady=10)
     max_offset_entry = tk.Entry(max_offset_frame, font=("Arial", 12), width=25, validate="key", validatecommand=vcmd)
     max_offset_entry.insert(0, "0.10")
+    max_offset_unit = tk.Label(max_offset_frame, text="% as a decimal", font=("Arial", 10))
+    max_offset_unit.pack()
     max_offset_entry.pack()
+
+    # GA controls: population size and number of generations
+    pop_frame = tk.Frame(label_frame)
+    pop_frame.grid(row=0, column=3, padx=10, pady=10)
+    pop_label = tk.Label(pop_frame, text="Population size:", font=("Arial", 12))
+    pop_label.pack(pady=6)
+    ivcmd = (root.register(validate_int), "%P")
+    pop_entry = tk.Entry(pop_frame, font=("Arial", 12), width=25, validate="key", validatecommand=ivcmd)
+    pop_entry.insert(0, str(ga.POP_SIZE))
+    pop_entry.pack()
+
+    gen_frame = tk.Frame(label_frame)
+    gen_frame.grid(row=1, column=3, padx=10, pady=10)
+    gen_label = tk.Label(gen_frame, text="Generations:", font=("Arial", 12))
+    gen_label.pack(pady=6)
+    gen_entry = tk.Entry(gen_frame, font=("Arial", 12), width=25, validate="key", validatecommand=ivcmd)
+    gen_entry.insert(0, str(ga.GENERATIONS))
+    gen_entry.pack()
+
+    # Dome variant selector
+    variant_frame = tk.Frame(label_frame)
+    variant_frame.grid(row=0, column=4, padx=10, pady=10)
+    variant_label = tk.Label(variant_frame, text="Dome variant:", font=("Arial", 12))
+    variant_label.pack(pady=6)
+    variant_var = tk.StringVar(value=ga.DOME_VARIANT)
+    variant_open = tk.Radiobutton(variant_frame, text="Open (no apex)", variable=variant_var, value="open")
+    variant_full = tk.Radiobutton(variant_frame, text="Full (closed)", variable=variant_var, value="full")
+    variant_open.pack()
+    variant_full.pack()
 
     status_var = tk.StringVar(value="Ready")
     status_label = tk.Label(root, textvariable=status_var, font=("Arial", 10))
@@ -233,6 +284,9 @@ def main():
         max_thick = float(max_thick_entry.get())
         min_offset = float(min_offset_entry.get())
         max_offset = float(max_offset_entry.get())
+        pop_size = int(pop_entry.get())
+        generations = int(gen_entry.get())
+        variant = variant_var.get()
 
         run_button.config(state=tk.DISABLED)
         status_var.set("Running GA...")
@@ -244,22 +298,30 @@ def main():
             try:
                 with contextlib.redirect_stdout(output_stream):
                     print(f"Radius: {radius}, Height: {height}")
-                    ga.set_params(radius, height, min_thick, max_thick, min_offset, max_offset)
+                    ga.set_params(radius, height, min_thick, max_thick, min_offset, max_offset,
+                                  pop_size=pop_size, generations=generations, variant=variant)
                     if enable_gui:
                         ga.run_ga(progress_callback=lambda snapshot, genome: safe_after(0, lambda data=snapshot, g=genome: redraw(data, g)))
                     else:
                         ga.run_ga()
-                safe_after(0, lambda: finish_run("Done"))
             except Exception:
-                safe_after(0, lambda: finish_run("Ready"))
+                pass
+            finally:
+                if output_stream is not None:
+                    output_stream.flush()
+                safe_after(0, finish_run)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    run_button = tk.Button(root, text="Calculate", font=("Arial", 12), command=start)
-    run_button.pack(pady=20)
+    # Bottom control frame keeps buttons visible and accessible
+    bottom_frame = tk.Frame(root)
+    bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
 
-    gui_button = tk.Checkbutton(root, text="Show GUI", variable=enable_gui, command=toggle_gui)
-    gui_button.pack(pady=10)
+    run_button = tk.Button(bottom_frame, text="Calculate", font=("Arial", 12), command=start)
+    run_button.pack(side=tk.LEFT, padx=20)
+
+    gui_button = tk.Checkbutton(bottom_frame, text="Show GUI", variable=enable_gui, command=toggle_gui)
+    gui_button.pack(side=tk.LEFT, padx=10)
 
     root.protocol("WM_DELETE_WINDOW", on_close)
     root.mainloop()
