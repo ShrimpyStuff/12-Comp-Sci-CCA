@@ -43,3 +43,10 @@ deactivate
 ```bash
 pip install -r requirements.txt
 ```
+
+
+### 5. Run GUI.py
+
+```bash
+python src/gui.py
+```
