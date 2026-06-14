@@ -34,26 +34,30 @@ def _icosahedron():
 
     Returns (verts (12,3), faces (20,3)). Faces are CCW viewed from outside.
     """
+    # An icosahedron has 12 vertices. Placed on the unit sphere they form:
+    # the north pole, a ring of 5 at height +z, a ring of 5 at height -z
+    # (rotated half a step so the rings interlock), and the south pole.
     z = 1.0 / np.sqrt(5.0)
-    r = 2.0 / np.sqrt(5.0)
-    v = [(0.0, 0.0, 1.0)]
+    r = 2.0 / np.sqrt(5.0)          # horizontal radius of each ring
+    v = [(0.0, 0.0, 1.0)]          # vertex 0: north pole
     for k in range(5):
-        t = 2.0 * np.pi * k / 5.0
+        t = 2.0 * np.pi * k / 5.0  # evenly spaced angle around the ring
         v.append((r * np.cos(t), r * np.sin(t), z))
     for k in range(5):
-        t = 2.0 * np.pi * (k + 0.5) / 5.0
+        t = 2.0 * np.pi * (k + 0.5) / 5.0  # +0.5 step offsets the lower ring
         v.append((r * np.cos(t), r * np.sin(t), -z))
-    v.append((0.0, 0.0, -1.0))
+    v.append((0.0, 0.0, -1.0))    # vertex 11: south pole
     verts = np.array(v)
 
+    # Each face is a triangle given as 3 vertex indices, wound CCW from outside.
     faces = []
-    # top cap
+    # top cap: 5 triangles fanning out from the north pole
     for k in range(5):
         faces.append((0, 1 + k, 1 + (k + 1) % 5))
-    # bottom cap
+    # bottom cap: 5 triangles fanning out from the south pole
     for k in range(5):
         faces.append((11, 6 + (k + 1) % 5, 6 + k))
-    # middle strip
+    # middle strip: 10 triangles linking the two rings into a zig-zag band
     for k in range(5):
         u = 1 + k
         u_next = 1 + (k + 1) % 5
@@ -74,6 +78,8 @@ def _subdivide_class1(verts, faces, V):
     cache = {}
 
     def get_idx(p):
+        # Push the point onto the unit sphere, then look it up by its rounded
+        # coordinates so a vertex shared by two faces is only stored once.
         p = p / np.linalg.norm(p)
         key = tuple(np.round(p, 10))
         idx = cache.get(key)
@@ -86,12 +92,17 @@ def _subdivide_class1(verts, faces, V):
     out_faces = []
     for fa, fb, fc in faces:
         A, B, C = verts[fa], verts[fb], verts[fc]
+        # Build a triangular lattice of points across the face. (i, j) are
+        # barycentric-style counts: p is a weighted blend of corners A, B, C,
+        # so (i, j) steps move us in a grid over the triangle.
         grid = {}
         for i in range(V + 1):
             for j in range(V + 1 - i):
                 k = V - i - j
                 p = (k * A + i * B + j * C) / V
                 grid[(i, j)] = get_idx(p)
+        # Tile the lattice with small triangles. Two passes are needed because
+        # a subdivided triangle is filled by upward- and downward-pointing ones.
         for i in range(V):
             for j in range(V - i):
                 out_faces.append((grid[(i, j)], grid[(i + 1, j)], grid[(i, j + 1)]))
@@ -140,18 +151,24 @@ def generate_dome(R, h, V, radial_offsets=None):
         # Each unit-sphere vertex is its own radial unit vector; scale by (1 + delta)
         v_unit = v_unit * (1.0 + radial_offsets)[:, None]
 
-    # Scale so z=0 circle of the scaled sphere has radius R and apex at (0,0,h).
+    # We want a spherical cap: apex at height h, and the slice at z=0 a circle
+    # of radius R. Solving those two conditions gives the sphere radius R_s and
+    # how far its centre sits below the apex (z_c). The unit sphere is then
+    # scaled by R_s and shifted up by z_c to match.
     R_s = (R * R + h * h) / (2.0 * h)
     z_c = (h * h - R * R) / (2.0 * h)
     v = R_s * v_unit + np.array([0.0, 0.0, z_c])
 
+    # EPS_Z is a small tolerance so points sitting essentially on z=0 are
+    # treated as exactly on the ground, not slightly above or below.
     EPS_Z = 1e-9
     node_list = []
-    orig_map = {}   # original index -> new index
-    clip_map = {}   # frozenset({i,j}) -> new index (clipped at z=0)
+    orig_map = {}   # original index -> new index (only nodes we actually keep)
+    clip_map = {}   # frozenset({i,j}) -> new index for a node created on z=0
     edges = set()
 
     def add_orig(i):
+        # Add a kept vertex once, reusing its new index if seen before.
         nid = orig_map.get(i)
         if nid is None:
             nid = len(node_list)
@@ -160,16 +177,20 @@ def generate_dome(R, h, V, radial_offsets=None):
         return nid
 
     def add_clip(i, j):
-        # i is above z=0, j is below. If i is on z=0, reuse the original node.
+        # Edge i->j crosses the ground: i is above z=0, j is below. Create the
+        # crossing point. If i is already on z=0, just reuse it.
         if abs(v[i, 2]) < EPS_Z:
             return add_orig(i)
         key = frozenset({i, j})
         nid = clip_map.get(key)
         if nid is not None:
             return nid
+        # Linearly interpolate along the edge to find where z hits 0.
         zi, zj = v[i, 2], v[j, 2]
         t = zi / (zi - zj)
         p = v[i] + t * (v[j] - v[i])
+        # Push the new point straight out to radius R so every base node lands
+        # exactly on the ground circle.
         r_xy = np.hypot(p[0], p[1])
         if r_xy > 1e-12:
             p[0] *= R / r_xy
@@ -181,23 +202,29 @@ def generate_dome(R, h, V, radial_offsets=None):
         return nid
 
     def add_edge(a, b):
+        # Store an undirected edge with a sorted key so duplicates collapse.
         if a != b:
             edges.add((min(a, b), max(a, b)))
 
+    # Walk every triangle and keep only the part at or above the ground (z=0).
     for fa, fb, fc in f:
         tri = (fa, fb, fc)
         z_vals = v[list(tri), 2]
-        keep = z_vals > -EPS_Z
+        keep = z_vals > -EPS_Z          # which corners are above the ground
         n_keep = int(keep.sum())
         if n_keep == 0:
-            continue
+            continue                    # whole triangle is below ground: drop it
         if n_keep == 3:
+            # Entirely above ground: keep all three edges as-is.
             n = [add_orig(x) for x in tri]
             add_edge(n[0], n[1]); add_edge(n[1], n[2]); add_edge(n[2], n[0])
             continue
+        # Otherwise the triangle straddles z=0 and must be clipped.
         above = [x for x, k in zip(tri, keep) if k]
         below = [x for x, k in zip(tri, keep) if not k]
         if n_keep == 2:
+            # Two corners above, one below: the kept piece is a quad (the two
+            # top corners plus two new ground points where the edges cross).
             a, b = above
             c = below[0]
             na, nb = add_orig(a), add_orig(b)
@@ -207,6 +234,8 @@ def generate_dome(R, h, V, radial_offsets=None):
             add_edge(nb, nbc)
             add_edge(nac, nbc)
         else:  # n_keep == 1
+            # One corner above, two below: the kept piece is a small triangle
+            # (the top corner plus two new ground points).
             a = above[0]
             b, c = below
             na = add_orig(a)
@@ -216,6 +245,7 @@ def generate_dome(R, h, V, radial_offsets=None):
             add_edge(nab, nac)
 
     nodes = np.array(node_list)
+    # Base nodes are everything sitting on the ground; the apex is the highest.
     base_ids = np.where(np.abs(nodes[:, 2]) < 1e-6)[0].tolist()
     apex_id = int(np.argmax(nodes[:, 2]))
     members = sorted(edges)

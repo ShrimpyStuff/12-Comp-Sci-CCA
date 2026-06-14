@@ -19,6 +19,9 @@ OpenDome = namedtuple("OpenDome", "nodes members base_ids apex_id")
 
 
 def _remap_indices(keep_mask):
+    # After deleting a node, the remaining nodes are renumbered to stay
+    # contiguous. This builds an old-index -> new-index lookup; dropped
+    # nodes map to -1.
     remap = -np.ones(len(keep_mask), dtype=int)
     remap[keep_mask] = np.arange(int(keep_mask.sum()))
     return remap
@@ -29,10 +32,11 @@ def generate_open_dome(R, h, V, radial_offsets=None):
 
     The nodes that were adjacent to the original apex are returned in apex_id.
     """
+    # Start from the normal closed dome, then strip out the single apex node.
     dome = geodesic.generate_dome(R=R, h=h, V=V, radial_offsets=radial_offsets)
 
     keep_nodes = np.ones(len(dome.nodes), dtype=bool)
-    keep_nodes[dome.apex_id] = False
+    keep_nodes[dome.apex_id] = False      # mark the apex for removal
     remap = _remap_indices(keep_nodes)
 
     nodes = dome.nodes[keep_nodes].copy()
@@ -41,6 +45,8 @@ def generate_open_dome(R, h, V, radial_offsets=None):
     apex_ids = []
     seen_apex = set()
     for n1, n2 in dome.members:
+        # Any member touching the old apex is dropped, but its far end becomes
+        # part of the new open top ring (collected once each in apex_ids).
         if dome.apex_id in (n1, n2):
             other = n2 if n1 == dome.apex_id else n1
             mapped_other = int(remap[other])
@@ -48,6 +54,7 @@ def generate_open_dome(R, h, V, radial_offsets=None):
                 seen_apex.add(mapped_other)
                 apex_ids.append(mapped_other)
             continue
+        # Ordinary member: keep it, renumbering both endpoints.
         members.append((int(remap[n1]), int(remap[n2])))
 
     base_ids = [int(remap[i]) for i in dome.base_ids]

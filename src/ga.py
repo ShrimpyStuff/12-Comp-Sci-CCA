@@ -39,12 +39,14 @@ SEED = 0
 _EXPECTED_LENGTHS_CACHE = {}
 _RUN_STAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-POP_SIZE = 60
-GENERATIONS = 100
+POP_SIZE = 60        # number of genomes (candidate domes) per generation
+GENERATIONS = 100    # how many generations to evolve
 
+# Mutation step sizes (standard deviation of the random nudge). Set to 10% of
+# each gene's allowed range so mutations explore without jumping wildly.
 MUTATION_THICKNESS_SIGMA = 0.10 * (THICKNESS_MAX - THICKNESS_MIN)  # mm
 MUTATION_OFFSET_SIGMA    = 0.10 * (OFFSET_MAX - OFFSET_MIN)         # dimensionless
-V_MUTATION_RATE = 0.05
+V_MUTATION_RATE = 0.05   # chance a mutation changes the subdivision frequency V
 
 
 def _dome_backend():
@@ -160,28 +162,33 @@ def decode(genome):
 
 
 def _dome_within_radius_limits(dome, min_radius=MIN_DOME_RADIUS, max_radius=MAX_DOME_RADIUS):
+    # Reject domes whose geometry falls outside the allowed size envelope, so
+    # the GA can't "cheat" by evolving an unrealistically small or large shape.
     # min_radius and max_radius are provided in mm by default; convert to metres
     min_r_m = min_radius / 1000.0
     max_r_m = max_radius / 1000.0
     nodes = np.asarray(dome.nodes, dtype=float)
-    radii = np.linalg.norm(nodes, axis=1)
+    radii = np.linalg.norm(nodes, axis=1)   # distance of each node from the origin
 
     if np.any(radii > max_r_m):
-        return False
+        return False                        # a node pokes out past the max radius
 
     if np.any(radii < min_r_m):
-        return False
+        return False                        # a node sits inside the min radius
 
     if not dome.members:
         return True
 
+    # A node can clear the min radius while a strut between two nodes still cuts
+    # inside it. So also check the closest approach of every strut to the origin.
     member_nodes = np.asarray(dome.members, dtype=int)
-    a = nodes[member_nodes[:, 0]]
-    b = nodes[member_nodes[:, 1]]
+    a = nodes[member_nodes[:, 0]]           # start point of each strut
+    b = nodes[member_nodes[:, 1]]           # end point of each strut
     ab = b - a
-    ab_len_sq = np.einsum("ij,ij->i", ab, ab)
+    ab_len_sq = np.einsum("ij,ij->i", ab, ab)   # squared length of each strut
 
-    # Distance from the origin to each strut segment.
+    # Project the origin onto each strut line to find the nearest point. t is
+    # how far along a->b that point is; clamping to [0,1] keeps it on the segment.
     t = -np.einsum("ij,ij->i", a, ab) / np.where(ab_len_sq > 0.0, ab_len_sq, 1.0)
     t = np.clip(t, 0.0, 1.0)
     closest = a + ab * t[:, None]
@@ -200,10 +207,39 @@ def _evaluate_uncached(genome):
     return fea.specific_strength(model, dome, thicknesses)
 
 
+# With the "spawn" start method (the default on macOS and Windows) each Pool
+# worker re-imports this module from scratch and loses anything set by
+# set_params(). These helpers snapshot the live parameters in the parent and
+# re-apply them in every worker, so fitness is evaluated with the user's
+# settings instead of the module defaults.
+def _worker_params():
+    return {
+        "DOME_R": DOME_R,
+        "DOME_H": DOME_H,
+        "THICKNESS_MIN": THICKNESS_MIN,
+        "THICKNESS_MAX": THICKNESS_MAX,
+        "OFFSET_MIN": OFFSET_MIN,
+        "OFFSET_MAX": OFFSET_MAX,
+        "SEED": SEED,
+        "POP_SIZE": POP_SIZE,
+        "GENERATIONS": GENERATIONS,
+        "DOME_VARIANT": DOME_VARIANT,
+    }
+
+
+def _init_worker(params):
+    globals().update(params)
+
+
 def tournament_selection(population, fitness, k=3, rng=None):
+    # Pick k random genomes and return the fittest of them. This gives weaker
+    # genomes a chance to be parents while still favouring the strong ones.
     if rng is None:
         rng = np.random.default_rng()
     fitness = np.asarray(fitness)
+    # Can't sample more genomes than exist, so shrink the tournament if the
+    # population is tiny (e.g. the user set a very small population size).
+    k = min(k, len(population))
     idx = rng.choice(len(population), size=k, replace=False)
     winner = idx[np.argmax(fitness[idx])]
     return population[winner]
@@ -213,11 +249,14 @@ CROSSOVER_RATE = 0.8
 
 
 def crossover(p1, p2, rng=None):
+    # Uniform crossover: build a child by picking each gene from one parent or
+    # the other at random (50/50). Both parents must share the same V so their
+    # gene arrays line up.
     if rng is None:
         rng = np.random.default_rng()
     assert p1.V == p2.V, f"crossover needs matching V, got {p1.V} vs {p2.V}"
 
-    t_mask = rng.random(p1.thicknesses.shape) < 0.5
+    t_mask = rng.random(p1.thicknesses.shape) < 0.5   # True -> take from p1
     o_mask = rng.random(p1.offsets.shape) < 0.5
 
     child_thicknesses = np.where(t_mask, p1.thicknesses, p2.thicknesses)
@@ -238,28 +277,33 @@ def mutate(genome, rng=None):
     if rng is None:
         rng = np.random.default_rng()
 
+    # Occasionally jump to a neighbouring subdivision frequency. Because that
+    # changes how many genes the genome needs, we just start fresh at the new V.
     if rng.random() < V_MUTATION_RATE:
         i = V_CHOICES.index(genome.V)
-        delta = int(rng.choice([-1, 1]))
-        new_i = max(0, min(len(V_CHOICES) - 1, i + delta))
+        delta = int(rng.choice([-1, 1]))                  # step up or down one V
+        new_i = max(0, min(len(V_CHOICES) - 1, i + delta))  # stay in range
         new_V = V_CHOICES[new_i]
         if new_V != genome.V:
             return random_genome(V=new_V, rng=rng)
 
     thicknesses = genome.thicknesses.copy()
     offsets = genome.offsets.copy()
+    # Mutate each gene with probability 1/N, so on average one gene changes.
     N = len(thicknesses) + len(offsets)
     p = 1.0 / N
 
-    t_mask = rng.random(thicknesses.shape) < p
+    t_mask = rng.random(thicknesses.shape) < p   # which genes to nudge
     o_mask = rng.random(offsets.shape) < p
 
+    # Add small Gaussian noise to the chosen genes.
     t_noise = rng.normal(0.0, MUTATION_THICKNESS_SIGMA, thicknesses.shape)
     o_noise = rng.normal(0.0, MUTATION_OFFSET_SIGMA, offsets.shape)
 
     thicknesses = np.where(t_mask, thicknesses + t_noise, thicknesses)
     offsets     = np.where(o_mask, offsets + o_noise, offsets)
 
+    # Keep every gene inside its allowed range after mutating.
     thicknesses = np.clip(thicknesses, THICKNESS_MIN, THICKNESS_MAX)
     offsets     = np.clip(offsets, OFFSET_MIN, OFFSET_MAX)
 
@@ -389,14 +433,20 @@ def set_params(radius, height, min_thick, max_thick, min_offset, max_offset,
 
 
 def run_ga(progress_callback=None):
+    # Seed the random generator so a run is reproducible.
     rng = np.random.default_rng(seed=SEED)
 
+    # Snapshot the current parameters so spawned workers can re-apply them.
+    worker_params = _worker_params()
+
+    # Start with a random population and score it. Pool runs the (slow) FEA
+    # evaluations across all CPU cores in parallel.
     population = [random_genome(V=2, rng=rng) for _ in range(POP_SIZE)]
-    with Pool() as pool:
+    with Pool(initializer=_init_worker, initargs=(worker_params,)) as pool:
         fitness = pool.map(_evaluate_uncached, population)
 
     history = []
-    best_ever = -float("inf")
+    best_ever = -float("inf")   # best fitness seen across all generations
 
     _ensure_parent_dir(log_csv_path())
     with open(log_csv_path(), "w", newline="") as csv_file:
@@ -404,20 +454,24 @@ def run_ga(progress_callback=None):
         writer.writerow(["generation", "best", "mean", "worst"])
 
         for gen in range(GENERATIONS):
+            # Build the next generation by repeatedly selecting parents and
+            # producing one child each time until the population is refilled.
             next_pop = []
             while len(next_pop) < POP_SIZE:
                 p1 = tournament_selection(population, fitness, k=3, rng=rng)
                 p2 = tournament_selection(population, fitness, k=3, rng=rng)
+                # Mix the two parents, or (if V differs / by chance) just copy one.
                 if p1.V == p2.V and rng.random() < CROSSOVER_RATE:
                     child = crossover(p1, p2, rng=rng)
                 else:
                     child = clone(p1)
-                child = mutate(child, rng=rng)
+                child = mutate(child, rng=rng)   # always give the child a chance to mutate
                 next_pop.append(child)
             population = next_pop
-            with Pool() as pool:
+            with Pool(initializer=_init_worker, initargs=(worker_params,)) as pool:
                 fitness = pool.map(_evaluate_uncached, population)
 
+            # Record this generation's best/mean/worst for the fitness curve.
             best = max(fitness)
             mean = sum(fitness) / len(fitness)
             worst = min(fitness)
@@ -427,6 +481,7 @@ def run_ga(progress_callback=None):
             writer.writerow([gen, best, mean, worst])
             csv_file.flush()
 
+            # Save the genome whenever we beat the all-time best.
             if best > best_ever:
                 best_ever = best
                 save_genome(population[best_idx], best_genome_path())

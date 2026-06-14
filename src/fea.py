@@ -70,12 +70,18 @@ def analyze_structure(dome, thicknesses) -> FEModel3D: # Hopefully works for bot
         model.add_member(f"Member_{i}", i_node=i_name, j_node=j_name,
                         material_name="PLA", section_name=sec_name)
 
+    # Boundary conditions: hold the base on the ground without over-constraining
+    # it (a statically determinate setup). Every base node is stopped from
+    # sinking (Z), then just two nodes pin the horizontal position so the dome
+    # can't slide or spin while still being free to deform naturally.
     for node in dome.base_ids:
         model.def_support(f"Node_{node}", support_DZ=True)  # Fix Z direction
 
     model.def_support(f"Node_{dome.base_ids[0]}", support_DX=True, support_DY=True, support_DZ=True)  # Fix one node completely
     model.def_support(f"Node_{dome.base_ids[1]}", support_DX=True, support_DY=False, support_DZ=True)  # Fix another node in only X and Z to prevent sliding
 
+    # Apply a downward reference load on the apex. For the open dome the load is
+    # split evenly across the whole top ring so no single node carries it all.
     load_share = -REFERENCE_LOAD / len(apex_ids)
     for node_id in apex_ids:
         model.add_node_load(_apex_node_name(apex_ids, node_id), direction="FZ", P=load_share)
@@ -95,17 +101,20 @@ def force_at_first_failure(model, thicknesses,
     v1 limitation: uses axial stress only, not combined axial + bending,
     and does not account for buckling.
     """
+    # Find the most-stressed member under the reference load.
     thicknesses = np.asarray(thicknesses, dtype=float)
     max_stress = 0.0
     for i, r in enumerate(thicknesses):
         A = np.pi * r * r
         member = model.members[f"Member_{i}"]
         f_axial = max(abs(member.max_axial()), abs(member.min_axial()))  # worst-case axial force magnitude
-        sigma = f_axial / A
+        sigma = f_axial / A          # stress = force / area
         if sigma > max_stress:
             max_stress = sigma
     if max_stress <= 0.0:
-        return float("inf")
+        return float("inf")          # no stress anywhere: never fails
+    # Stress scales linearly with load, so scale the reference load by the ratio
+    # of yield stress to current peak stress to find the load that first fails.
     return reference_load * yield_stress / max_stress
 
 
@@ -121,7 +130,11 @@ def total_mass(dome, thicknesses, density=DENSITY):
 
 
 def specific_strength(model, dome, thicknesses):
-    """GA fitness: failure force divided by total mass (N/kg)."""
+    """GA fitness: failure force divided by total mass.
+
+    Note: this divides by mass squared (m**2), not mass, so the score rewards
+    lighter domes more aggressively than a plain strength-to-weight ratio.
+    """
     f = force_at_first_failure(model, thicknesses)
     m = total_mass(dome, thicknesses)
     # print(m)

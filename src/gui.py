@@ -38,6 +38,9 @@ def validate_int(text):
 
 
 class StreamRedirector:
+    # A fake "file" that stands in for stdout. The GA prints progress with
+    # print(); we capture that text, split it into whole lines, and hand each
+    # finished line to on_line() (which forwards it to the GUI text box).
     def __init__(self, on_line):
         self.on_line = on_line
         self.buffer = ""
@@ -46,6 +49,7 @@ class StreamRedirector:
         if not text:
             return 0
 
+        # Text can arrive in chunks, so buffer it and only emit complete lines.
         self.buffer += text
         while "\n" in self.buffer:
             line, self.buffer = self.buffer.split("\n", 1)
@@ -53,6 +57,7 @@ class StreamRedirector:
         return len(text)
 
     def flush(self):
+        # Emit whatever is left that didn't end in a newline.
         if self.buffer:
             self.on_line(self.buffer)
             self.buffer = ""
@@ -204,6 +209,8 @@ def main():
     gui_button: tk.Checkbutton
 
     def is_open():
+        # True only while the window still exists. Used to guard against the
+        # background GA thread trying to update a window the user has closed.
         if closing:
             return False
         try:
@@ -212,6 +219,9 @@ def main():
             return False
 
     def safe_after(delay, callback):
+        # Tkinter is not thread-safe, so the worker thread can't touch widgets
+        # directly. root.after() hands the callback to the main GUI thread to
+        # run there. Re-check is_open() in case the window closed in between.
         if not is_open():
             return
         try:
@@ -250,6 +260,8 @@ def main():
             pass
 
     def redraw(history, best_genome=None):
+        # Refresh both plots: the fitness-over-time curve on the left and the
+        # current best dome shape on the right.
         if not is_open():
             return
         ga.draw_history(history, axis)
@@ -271,46 +283,62 @@ def main():
             return
         write_output(line + "\n")
 
-    def finish_run(status):
+    def finish_run(status="Done"):
+        # Called with no argument from the worker's finally block, so status
+        # needs a default or this raises TypeError and the button stays stuck.
         if not is_open():
             return
         run_button.config(state=tk.NORMAL)
         status_var.set(status)
 
     def start():
-        radius = float(radius_entry.get())
-        height = float(height_entry.get())
-        min_thick = float(min_thick_entry.get())
-        max_thick = float(max_thick_entry.get())
-        min_offset = float(min_offset_entry.get())
-        max_offset = float(max_offset_entry.get())
-        pop_size = int(pop_entry.get())
-        generations = int(gen_entry.get())
+        # Read every input box and convert to numbers for the GA. The fields
+        # allow being temporarily blank, so guard against empty/invalid input
+        # instead of crashing when Calculate is clicked.
+        try:
+            radius = float(radius_entry.get())
+            height = float(height_entry.get())
+            min_thick = float(min_thick_entry.get())
+            max_thick = float(max_thick_entry.get())
+            min_offset = float(min_offset_entry.get())
+            max_offset = float(max_offset_entry.get())
+            pop_size = int(pop_entry.get())
+            generations = int(gen_entry.get())
+        except ValueError:
+            status_var.set("Please fill in all fields with valid numbers.")
+            return
         variant = variant_var.get()
 
-        run_button.config(state=tk.DISABLED)
+        run_button.config(state=tk.DISABLED)   # block a second run while busy
         status_var.set("Running GA...")
         write_output("", clear=True)
 
+        # Send anything the GA prints to the output box, via the main thread.
         output_stream = StreamRedirector(lambda line: safe_after(0, lambda l=line: append_output(l)))
 
+        # The GA is slow, so run it on a background thread; otherwise the window
+        # would freeze. The worker never touches widgets directly: it routes all
+        # updates back through safe_after().
         def worker():
             try:
                 with contextlib.redirect_stdout(output_stream):
                     print(f"Radius: {radius}, Height: {height}")
                     ga.set_params(radius, height, min_thick, max_thick, min_offset, max_offset,
                                   pop_size=pop_size, generations=generations, variant=variant)
-                    if enable_gui:
+                    if enable_gui.get():   # .get() reads the checkbox; the var itself is always truthy
+                        # progress_callback fires each generation to refresh the plots.
                         ga.run_ga(progress_callback=lambda snapshot, genome: safe_after(0, lambda data=snapshot, g=genome: redraw(data, g)))
                     else:
                         ga.run_ga()
             except Exception:
                 pass
             finally:
+                # Always flush remaining output and re-enable the button.
                 if output_stream is not None:
                     output_stream.flush()
                 safe_after(0, finish_run)
 
+        # daemon=True so the thread won't keep the app alive after the window closes.
         threading.Thread(target=worker, daemon=True).start()
 
     # Bottom control frame keeps buttons visible and accessible
