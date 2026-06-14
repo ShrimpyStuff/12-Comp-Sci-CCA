@@ -5,7 +5,6 @@ A Flask web application for the Year 12 Computer Science CCA project.
 ## Prerequisites
 
 - [Python 3](https://www.python.org/downloads/)
-- [Docker](https://www.docker.com)
 - Git
 
 ## Setup
@@ -44,19 +43,3 @@ deactivate
 ```bash
 pip install -r requirements.txt
 ```
-
-## Running with Docker
-
-From the project root, build the image:
-
-```bash
-docker build -t my-image-name .
-```
-
-Then start the container:
-
-```bash
-docker run -d -p 8080:80 my-image-name
-```
-
-The app will be available at [http://localhost:8080](http://localhost:8080).
